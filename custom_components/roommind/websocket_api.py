@@ -53,6 +53,7 @@ _SETTINGS_SAVE_FIELDS = (
     "mold_notifications_enabled", "mold_notification_targets",
     "mold_prevention_enabled", "mold_prevention_intensity",
     "mold_prevention_notify_enabled", "mold_prevention_notify_targets",
+    "room_order", "group_by_floor",
 )
 
 
@@ -157,6 +158,8 @@ async def websocket_list_rooms(
         "vacation_temp": settings.get("vacation_temp") if vacation_active else None,
         "vacation_until": vacation_until if vacation_active else None,
         "hidden_rooms": settings.get("hidden_rooms", []),
+        "room_order": settings.get("room_order", []),
+        "group_by_floor": settings.get("group_by_floor", False),
         "control_mode": settings.get("control_mode", "bangbang"),
         "presence_enabled": settings.get("presence_enabled", False),
         "presence_persons": settings.get("presence_persons", []),
@@ -422,6 +425,8 @@ async def websocket_get_settings(
                 ),
             }
         ],
+        vol.Optional("room_order"): [str],
+        vol.Optional("group_by_floor"): bool,
     }
 )
 @websocket_api.async_response

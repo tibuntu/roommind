@@ -3,6 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import type {
   HomeAssistant,
   HassArea,
+  HassFloor,
   RoomConfig,
 } from "./types";
 import { getEntitiesForArea } from "./utils/room-state";
@@ -56,6 +57,9 @@ export class RoomMindPanel extends LitElement {
   @state() private _anyoneHome = true;
   @state() private _presencePersons: string[] = [];
   @state() private _saveStatus: "idle" | "saving" | "saved" | "error" = "idle";
+  @state() private _roomOrder: string[] = [];
+  @state() private _groupByFloor = false;
+  @state() private _reorderMode = false;
 
   private _refreshInterval?: ReturnType<typeof setInterval>;
   private _routeApplied = false;
@@ -259,8 +263,14 @@ export class RoomMindPanel extends LitElement {
       padding: 12px 16px;
     }
 
-    .hidden-rooms-toggle {
+    .stats-actions {
+      display: flex;
+      align-items: center;
       margin-left: auto;
+      gap: 0;
+    }
+
+    .hidden-rooms-toggle {
       --mdc-icon-button-size: 36px;
       --mdc-icon-size: 20px;
       color: var(--secondary-text-color);
@@ -307,6 +317,30 @@ export class RoomMindPanel extends LitElement {
       color: var(--secondary-text-color);
       text-transform: uppercase;
       letter-spacing: 0.5px;
+    }
+
+    .floor-heading {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--secondary-text-color);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin: 20px 0 8px 0;
+    }
+
+    .floor-heading:first-of-type {
+      margin-top: 0;
+    }
+
+    .reorder-btn {
+      --mdc-icon-button-size: 36px;
+      --mdc-icon-size: 20px;
+      color: var(--secondary-text-color);
+    }
+
+    .reorder-done {
+      font-size: 14px;
+      margin-left: auto;
     }
   `;
 
@@ -476,13 +510,25 @@ export class RoomMindPanel extends LitElement {
                   <span class="stat-label">${localize("panel.stat.cooling", l)}</span>
                 </div>
               ` : nothing}
-              ${hiddenAreaInfos.length > 0
-                ? html`<ha-icon-button
-                    class="hidden-rooms-toggle"
-                    .path=${mdiEyeOff}
-                    @click=${() => { this._showHiddenRooms = !this._showHiddenRooms; }}
-                  ></ha-icon-button>`
-                : nothing}
+              <span class="stats-actions">
+                ${hiddenAreaInfos.length > 0
+                  ? html`<ha-icon-button
+                      class="hidden-rooms-toggle"
+                      .path=${mdiEyeOff}
+                      @click=${() => { this._showHiddenRooms = !this._showHiddenRooms; }}
+                    ></ha-icon-button>`
+                  : nothing}
+                ${this._reorderMode
+                  ? html`<ha-button class="reorder-done" @click=${this._onReorderDone}>
+                      ${localize("panel.reorder_done", l)}
+                    </ha-button>`
+                  : html`<ha-icon-button
+                      class="reorder-btn"
+                      .path=${"M9,3L5,7H8V14H10V7H13M16,17V10H14V17H11L15,21L19,17H16Z"}
+                      @click=${() => { this._reorderMode = true; }}
+                      title=${localize("panel.reorder", l)}
+                    ></ha-icon-button>`}
+              </span>
             </ha-card>
           `
         : nothing}
@@ -541,22 +587,30 @@ export class RoomMindPanel extends LitElement {
           `
         : nothing}
 
-      <div class="area-grid">
-        ${areaInfos.map(
-          (info) => html`
-            <rs-area-card
-              .area=${info.area}
-              .config=${info.config}
-              .climateEntityCount=${info.climateEntityCount}
-              .tempSensorCount=${info.tempSensorCount}
-              .hass=${this.hass}
-              .controlMode=${this._controlMode}
-              @area-selected=${this._onAreaSelected}
-              @hide-room=${this._onHideRoom}
-            ></rs-area-card>
-          `
-        )}
-      </div>
+      ${this._getFloorGroups(areaInfos).map((group) => html`
+        ${group.name ? html`<h4 class="floor-heading">${group.name}</h4>` : nothing}
+        <div class="area-grid">
+          ${group.items.map(
+            (info, idx) => html`
+              <rs-area-card
+                .area=${info.area}
+                .config=${info.config}
+                .climateEntityCount=${info.climateEntityCount}
+                .tempSensorCount=${info.tempSensorCount}
+                .hass=${this.hass}
+                .controlMode=${this._controlMode}
+                .reordering=${this._reorderMode}
+                .canMoveUp=${idx > 0}
+                .canMoveDown=${idx < group.items.length - 1}
+                @area-selected=${this._onAreaSelected}
+                @hide-room=${this._onHideRoom}
+                @move-room-up=${this._onMoveRoomUp}
+                @move-room-down=${this._onMoveRoomDown}
+              ></rs-area-card>
+            `
+          )}
+        </div>
+      `)}
     `;
   }
 
@@ -595,23 +649,59 @@ export class RoomMindPanel extends LitElement {
       };
     });
 
+    // Apply custom room_order, then default sort for unordered rooms
+    const orderIndex = new Map(this._roomOrder.map((id, i) => [id, i]));
     infos.sort((a, b) => {
-      const aScore = a.config
-        ? 2
-        : a.climateEntityCount > 0
-          ? 1
-          : 0;
-      const bScore = b.config
-        ? 2
-        : b.climateEntityCount > 0
-          ? 1
-          : 0;
-
+      const aIdx = orderIndex.get(a.area.area_id);
+      const bIdx = orderIndex.get(b.area.area_id);
+      // Both in custom order: use that order
+      if (aIdx !== undefined && bIdx !== undefined) return aIdx - bIdx;
+      // Only one in custom order: it comes first
+      if (aIdx !== undefined) return -1;
+      if (bIdx !== undefined) return 1;
+      // Neither in custom order: configured first, then alphabetical
+      const aScore = a.config ? 2 : a.climateEntityCount > 0 ? 1 : 0;
+      const bScore = b.config ? 2 : b.climateEntityCount > 0 ? 1 : 0;
       if (aScore !== bScore) return bScore - aScore;
       return a.area.name.localeCompare(b.area.name);
     });
 
     return infos;
+  }
+
+  private _getFloorGroups(areaInfos: AreaInfo[]): { name: string; items: AreaInfo[] }[] {
+    if (!this._groupByFloor || !this.hass.floors) return [{ name: "", items: areaInfos }];
+
+    const floors = this.hass.floors;
+    const l = this.hass.language;
+    const groups = new Map<string | null, AreaInfo[]>();
+    const floorOrder: (string | null)[] = [];
+
+    for (const info of areaInfos) {
+      const fid = info.area.floor_id ?? null;
+      if (!groups.has(fid)) {
+        groups.set(fid, []);
+        floorOrder.push(fid);
+      }
+      groups.get(fid)!.push(info);
+    }
+
+    // Sort floor keys: by level (if available), then by name, null last
+    floorOrder.sort((a, b) => {
+      if (a === null) return 1;
+      if (b === null) return -1;
+      const fa = floors[a];
+      const fb = floors[b];
+      if (fa?.level != null && fb?.level != null) return fb.level - fa.level;
+      if (fa?.level != null) return -1;
+      if (fb?.level != null) return 1;
+      return (fa?.name ?? "").localeCompare(fb?.name ?? "");
+    });
+
+    return floorOrder.map((fid) => ({
+      name: fid === null ? localize("panel.floor_other", l) : (floors[fid]?.name ?? localize("panel.floor_other", l)),
+      items: groups.get(fid)!,
+    }));
   }
 
   private async _loadRooms() {
@@ -622,6 +712,8 @@ export class RoomMindPanel extends LitElement {
         vacation_temp: number | null;
         vacation_until: number | null;
         hidden_rooms: string[];
+        room_order: string[];
+        group_by_floor: boolean;
         control_mode: "mpc" | "bangbang";
         presence_enabled: boolean;
         anyone_home: boolean;
@@ -634,6 +726,8 @@ export class RoomMindPanel extends LitElement {
       this._vacationTemp = result.vacation_temp ?? null;
       this._vacationUntil = result.vacation_until ?? null;
       this._hiddenRooms = result.hidden_rooms ?? [];
+      this._roomOrder = result.room_order ?? [];
+      this._groupByFloor = result.group_by_floor ?? false;
       this._controlMode = result.control_mode ?? "bangbang";
       this._presenceEnabled = result.presence_enabled ?? false;
       this._anyoneHome = result.anyone_home ?? true;
@@ -726,6 +820,60 @@ export class RoomMindPanel extends LitElement {
   private _onAnalyticsRoomSelected(e: CustomEvent<{ areaId: string }>) {
     this._analyticsRoom = e.detail.areaId;
     this._navigate(`/analytics/${e.detail.areaId}`);
+  }
+
+  private async _onMoveRoomUp(e: CustomEvent<{ areaId: string }>) {
+    this._moveRoom(e.detail.areaId, -1);
+  }
+
+  private async _onMoveRoomDown(e: CustomEvent<{ areaId: string }>) {
+    this._moveRoom(e.detail.areaId, 1);
+  }
+
+  private async _moveRoom(areaId: string, direction: -1 | 1) {
+    // Build full order from current visible (non-hidden) areaInfos
+    const visible = this._areaInfosCache.filter((i) => !this._hiddenRooms.includes(i.area.area_id));
+
+    // If grouping by floor, we only reorder within the same floor group
+    if (this._groupByFloor && this.hass.floors) {
+      const groups = this._getFloorGroups(visible);
+      for (const group of groups) {
+        const ids = group.items.map((i) => i.area.area_id);
+        const idx = ids.indexOf(areaId);
+        if (idx === -1) continue;
+        const targetIdx = idx + direction;
+        if (targetIdx < 0 || targetIdx >= ids.length) return;
+        [ids[idx], ids[targetIdx]] = [ids[targetIdx], ids[idx]];
+        // Rebuild full order from all groups
+        const newOrder = groups.flatMap((g) =>
+          g === group ? ids : g.items.map((i) => i.area.area_id)
+        );
+        await this._saveRoomOrder(newOrder);
+        return;
+      }
+    } else {
+      const ids = visible.map((i) => i.area.area_id);
+      const idx = ids.indexOf(areaId);
+      if (idx === -1) return;
+      const targetIdx = idx + direction;
+      if (targetIdx < 0 || targetIdx >= ids.length) return;
+      [ids[idx], ids[targetIdx]] = [ids[targetIdx], ids[idx]];
+      await this._saveRoomOrder(ids);
+    }
+  }
+
+  private async _saveRoomOrder(order: string[]) {
+    this._roomOrder = order;
+    this._areaInfosCache = this._computeAreaInfos();
+    try {
+      await this.hass.callWS({ type: "roommind/settings/save", room_order: order });
+    } catch (err) {
+      console.debug("[RoomMind] saveRoomOrder:", err);
+    }
+  }
+
+  private _onReorderDone() {
+    this._reorderMode = false;
   }
 
   private async _clearVacation() {

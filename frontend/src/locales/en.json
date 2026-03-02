@@ -13,6 +13,9 @@
   "panel.hide_room": "Hide",
   "panel.unhide": "Show",
   "panel.hidden_rooms": "Hidden rooms",
+  "panel.floor_other": "Other",
+  "panel.reorder": "Reorder rooms",
+  "panel.reorder_done": "Done",
 
   "room.back": "Back to rooms",
   "room.section.climate_mode": "Climate Mode",
@@ -127,6 +130,7 @@
   "card.window_open": "Window open",
 
   "settings.general_title": "General",
+  "settings.group_by_floor": "Group rooms by floor",
   "settings.climate_control_active": "Climate control active",
   "settings.climate_control_hint": "When disabled, RoomMind continues to monitor all sensors and train the model, but will not send any commands to your heating or cooling devices.",
   "settings.learning_title": "Model Training",

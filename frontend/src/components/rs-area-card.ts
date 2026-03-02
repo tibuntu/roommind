@@ -19,6 +19,9 @@ export class RsAreaCard extends LitElement {
   @property({ type: Number }) public tempSensorCount = 0;
   @property({ attribute: false }) public hass!: HomeAssistant;
   @property({ type: String }) public controlMode: "mpc" | "bangbang" = "bangbang";
+  @property({ type: Boolean }) public reordering = false;
+  @property({ type: Boolean }) public canMoveUp = false;
+  @property({ type: Boolean }) public canMoveDown = false;
 
   static styles = [
     modeStyles,
@@ -244,6 +247,66 @@ export class RsAreaCard extends LitElement {
       line-height: 1;
     }
 
+    .reorder-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      display: flex;
+      pointer-events: none;
+      border-radius: inherit;
+      overflow: hidden;
+    }
+
+    .reorder-half {
+      pointer-events: auto;
+      flex: 0 0 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.15s ease;
+      background: rgba(var(--rgb-primary-text-color, 0,0,0), 0.05);
+    }
+
+    .reorder-half.left {
+      border-radius: inherit;
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+      border-right: 1px solid rgba(var(--rgb-primary-text-color, 0,0,0), 0.08);
+    }
+
+    .reorder-half.right {
+      border-radius: inherit;
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
+      border-left: 1px solid rgba(var(--rgb-primary-text-color, 0,0,0), 0.08);
+      margin-left: auto;
+    }
+
+    .reorder-half:hover {
+      background: rgba(var(--rgb-primary-text-color, 0,0,0), 0.1);
+    }
+
+    .reorder-half ha-icon-button {
+      --mdc-icon-button-size: 36px;
+      --mdc-icon-size: 20px;
+      color: var(--secondary-text-color);
+      pointer-events: none;
+    }
+
+    .reorder-half:hover ha-icon-button {
+      color: var(--primary-text-color);
+    }
+
+    .reorder-half.disabled {
+      opacity: 0.25;
+      cursor: default;
+    }
+
+    .reorder-half.disabled:hover {
+      background: rgba(var(--rgb-primary-text-color, 0,0,0), 0.05);
+    }
+
     /* Device summary for unconfigured cards */
     .device-summary {
       font-size: 13px;
@@ -309,11 +372,33 @@ export class RsAreaCard extends LitElement {
         @click=${this._onCardClick}
       >
         <div class="accent ${accentClass}"></div>
-        <ha-icon-button
-          class="hide-btn"
-          .path=${mdiEyeOff}
-          @click=${this._onHideClick}
-        ></ha-icon-button>
+        ${!this.reordering
+          ? html`<ha-icon-button
+              class="hide-btn"
+              .path=${mdiEyeOff}
+              @click=${this._onHideClick}
+            ></ha-icon-button>`
+          : nothing}
+        ${this.reordering
+          ? html`<div class="reorder-overlay">
+              <div
+                class="reorder-half left ${!this.canMoveUp ? "disabled" : ""}"
+                @click=${this._onMoveUp}
+              >
+                <ha-icon-button
+                  .path=${"M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"}
+                ></ha-icon-button>
+              </div>
+              <div
+                class="reorder-half right ${!this.canMoveDown ? "disabled" : ""}"
+                @click=${this._onMoveDown}
+              >
+                <ha-icon-button
+                  .path=${"M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"}
+                ></ha-icon-button>
+              </div>
+            </div>`
+          : nothing}
         <div class="card-inner">
           <div class="card-header">
             <h3 class="area-name">${this.config?.display_name || this.area.name}</h3>
@@ -469,6 +554,30 @@ export class RsAreaCard extends LitElement {
   private _onCardClick() {
     this.dispatchEvent(
       new CustomEvent("area-selected", {
+        detail: { areaId: this.area.area_id },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  private _onMoveUp(e: Event) {
+    e.stopPropagation();
+    if (!this.canMoveUp) return;
+    this.dispatchEvent(
+      new CustomEvent("move-room-up", {
+        detail: { areaId: this.area.area_id },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  private _onMoveDown(e: Event) {
+    e.stopPropagation();
+    if (!this.canMoveDown) return;
+    this.dispatchEvent(
+      new CustomEvent("move-room-down", {
         detail: { areaId: this.area.area_id },
         bubbles: true,
         composed: true,

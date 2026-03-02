@@ -90,6 +90,8 @@ export interface GlobalSettings {
   mold_prevention_intensity?: "light" | "medium" | "strong";
   mold_prevention_notify_enabled?: boolean;
   mold_prevention_notify_targets?: NotificationTarget[];
+  room_order?: string[];
+  group_by_floor?: boolean;
 }
 
 // HA types for panel integration
@@ -102,6 +104,7 @@ export interface HomeAssistant {
   ) => Promise<void>;
   states: Record<string, HassEntity>;
   areas: Record<string, HassArea>;
+  floors?: Record<string, HassFloor>;
   entities: Record<string, HassEntityRegistryEntry>;
   devices: Record<string, HassDeviceRegistryEntry>;
   language: string;
@@ -112,6 +115,13 @@ export interface HassArea {
   area_id: string;
   name: string;
   picture: string | null;
+  floor_id: string | null;
+}
+
+export interface HassFloor {
+  floor_id: string;
+  name: string;
+  level: number | null;
 }
 
 export interface HassEntityRegistryEntry {

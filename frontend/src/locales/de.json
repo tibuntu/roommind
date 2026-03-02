@@ -13,6 +13,9 @@
   "panel.hide_room": "Ausblenden",
   "panel.unhide": "Einblenden",
   "panel.hidden_rooms": "Ausgeblendete Räume",
+  "panel.floor_other": "Sonstige",
+  "panel.reorder": "Räume sortieren",
+  "panel.reorder_done": "Fertig",
 
   "room.back": "Zurück zu den Räumen",
   "room.section.climate_mode": "Klimamodus",
@@ -127,6 +130,7 @@
   "card.window_open": "Fenster offen",
 
   "settings.general_title": "Allgemein",
+  "settings.group_by_floor": "Räume nach Etagen gruppieren",
   "settings.climate_control_active": "Klimasteuerung aktiv",
   "settings.climate_control_hint": "Wenn deaktiviert, überwacht RoomMind weiterhin alle Sensoren und trainiert das Modell, steuert aber keine Heizungen oder Klimaanlagen mehr an.",
   "settings.learning_title": "Modell-Training",

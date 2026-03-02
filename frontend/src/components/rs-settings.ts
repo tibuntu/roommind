@@ -13,6 +13,7 @@ export class RsSettings extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @property({ attribute: false }) public rooms: Record<string, RoomConfig> = {};
 
+  @state() private _groupByFloor = false;
   @state() private _climateControlActive = true;
   @state() private _learningDisabledRooms: string[] = [];
   @state() private _showLearningExceptions = false;
@@ -388,6 +389,7 @@ export class RsSettings extends LitElement {
       const result = await this.hass.callWS<{ settings: GlobalSettings }>({
         type: "roommind/settings/get",
       });
+      this._groupByFloor = result.settings.group_by_floor ?? false;
       this._climateControlActive = result.settings.climate_control_active ?? true;
       this._learningDisabledRooms = result.settings.learning_disabled_rooms ?? [];
       this._outdoorTempSensor = result.settings.outdoor_temp_sensor ?? "";
@@ -460,7 +462,20 @@ export class RsSettings extends LitElement {
           </div>
         </div>
         <div class="card-content">
-          <div class="settings-section first">
+          ${this.hass.floors && Object.keys(this.hass.floors).length > 0
+            ? html`<div class="settings-section first">
+                <div class="toggle-row">
+                  <div class="toggle-text">
+                    <span class="toggle-label">${localize("settings.group_by_floor", l)}</span>
+                  </div>
+                  <ha-switch
+                    .checked=${this._groupByFloor}
+                    @change=${this._onGroupByFloorChanged}
+                  ></ha-switch>
+                </div>
+              </div>`
+            : nothing}
+          <div class="settings-section ${this.hass.floors && Object.keys(this.hass.floors).length > 0 ? "" : "first"}">
             <div class="toggle-row">
               <div class="toggle-text">
                 <span class="toggle-label">${localize("settings.climate_control_active", l)}</span>
@@ -1179,6 +1194,11 @@ export class RsSettings extends LitElement {
     this._autoSave();
   }
 
+  private _onGroupByFloorChanged(e: Event) {
+    this._groupByFloor = (e.target as HTMLInputElement).checked;
+    this._autoSave();
+  }
+
   private _onClimateControlChanged(e: Event) {
     this._climateControlActive = (e.target as HTMLInputElement).checked;
     this._autoSave();
@@ -1380,6 +1400,7 @@ export class RsSettings extends LitElement {
     try {
       await this.hass.callWS({
         type: "roommind/settings/save",
+        group_by_floor: this._groupByFloor,
         climate_control_active: this._climateControlActive,
         learning_disabled_rooms: this._learningDisabledRooms,
         outdoor_temp_sensor: this._outdoorTempSensor,
