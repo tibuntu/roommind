@@ -548,11 +548,12 @@ export class RsDeviceSection extends LitElement {
       currentValue !== "unavailable";
 
     return html`
-      <div class="device-row ${isSelected ? "selected" : ""}">
+      <div class="device-row ${isSelected ? "selected" : ""}"
+        @click=${() => this._onSensorSelected(isSelected ? "" : entityId, type)}
+      >
         <ha-radio
           .checked=${isSelected}
           name="${type}-sensor"
-          @change=${() => this._onSensorSelected(entityId, type)}
         ></ha-radio>
         <div class="device-info">
           <div class="device-name-row">

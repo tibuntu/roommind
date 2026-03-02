@@ -1427,11 +1427,12 @@
             `:h}
       </div>
     `}_renderSensorRow(e,t,i){var g;const s=this.hass.states[e],o=((g=s==null?void 0:s.attributes)==null?void 0:g.friendly_name)||e,a=s==null?void 0:s.state,c=(t==="temp"?this.selectedTempSensor:this.selectedHumiditySensor)===e,d=t==="temp"?f(this.hass):"%",p=a&&a!=="unknown"&&a!=="unavailable";return l`
-      <div class="device-row ${c?"selected":""}">
+      <div class="device-row ${c?"selected":""}"
+        @click=${()=>this._onSensorSelected(c?"":e,t)}
+      >
         <ha-radio
           .checked=${c}
           name="${t}-sensor"
-          @change=${()=>this._onSensorSelected(e,t)}
         ></ha-radio>
         <div class="device-info">
           <div class="device-name-row">
