@@ -90,10 +90,11 @@ class RoomMindCoordinator(DataUpdateCoordinator):
 
         # Read outdoor sensors from global settings
         settings = store.get_settings()
+        outdoor_sensor_id = settings.get("outdoor_temp_sensor")
         raw_outdoor = read_sensor_value(
-            self.hass, settings.get("outdoor_temp_sensor"), "global", "outdoor temperature"
+            self.hass, outdoor_sensor_id, "global", "outdoor temperature"
         )
-        self.outdoor_temp = ha_temp_to_celsius(self.hass, raw_outdoor) if raw_outdoor is not None else None
+        self.outdoor_temp = ha_temp_to_celsius(self.hass, raw_outdoor, entity_id=outdoor_sensor_id) if raw_outdoor is not None else None
         self.outdoor_humidity = read_sensor_value(
             self.hass, settings.get("outdoor_humidity_sensor"), "global", "outdoor humidity"
         )
@@ -222,12 +223,13 @@ class RoomMindCoordinator(DataUpdateCoordinator):
         """Process a single room: read sensor, evaluate schedule, apply control."""
         area_id = room.get("area_id", "unknown")
 
-        has_external_sensor = bool(room.get("temperature_sensor"))
+        temp_sensor_id = room.get("temperature_sensor")
+        has_external_sensor = bool(temp_sensor_id)
 
         raw_temp = read_sensor_value(
-            self.hass, room.get("temperature_sensor"), area_id, "temperature"
+            self.hass, temp_sensor_id, area_id, "temperature"
         )
-        current_temp = ha_temp_to_celsius(self.hass, raw_temp) if raw_temp is not None else None
+        current_temp = ha_temp_to_celsius(self.hass, raw_temp, entity_id=temp_sensor_id) if raw_temp is not None else None
 
         # Fallback: read current_temperature from first thermostat/AC if no external sensor
         if current_temp is None and not has_external_sensor:

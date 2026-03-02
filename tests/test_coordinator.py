@@ -44,6 +44,7 @@ def make_mock_states_get(
     selector_entity="input_boolean.schedule_toggle",
     person_states=None,
     extra=None,
+    temp_unit=None,
 ):
     """Create a mock ``hass.states.get`` with configurable return values.
 
@@ -75,6 +76,9 @@ def make_mock_states_get(
     extra:
         Dict mapping arbitrary entity ids to ``(state_str, attrs_dict | None)``
         tuples for any entities not covered by the above parameters.
+    temp_unit:
+        If given (e.g. ``"°F"``), temperature sensor mocks will include
+        ``unit_of_measurement`` in their attributes.
     """
     if schedule_attrs is None:
         schedule_attrs = {}
@@ -85,6 +89,9 @@ def make_mock_states_get(
     if extra is None:
         extra = {}
 
+    def _temp_attrs():
+        return {"unit_of_measurement": temp_unit} if temp_unit else {}
+
     def _mock(entity_id):
         # Temperature sensor
         if entity_id == "sensor.living_room_temp":
@@ -92,6 +99,7 @@ def make_mock_states_get(
                 return None
             s = MagicMock()
             s.state = temp
+            s.attributes = _temp_attrs()
             return s
 
         # Humidity sensor
@@ -100,6 +108,7 @@ def make_mock_states_get(
                 return None
             s = MagicMock()
             s.state = humidity
+            s.attributes = {}
             return s
 
         # Schedule entity
@@ -113,6 +122,7 @@ def make_mock_states_get(
         if outdoor_temp is not None and entity_id == outdoor_temp_entity:
             s = MagicMock()
             s.state = outdoor_temp
+            s.attributes = _temp_attrs()
             return s
 
         # Window / door sensors
@@ -2157,6 +2167,7 @@ class TestFahrenheitConversion:
                 temp="64.4",
                 humidity="55.0",
                 outdoor_temp="50",
+                temp_unit="°F",
             ),
         )
         hass.services.async_call = AsyncMock()
@@ -2190,7 +2201,7 @@ class TestFahrenheitConversion:
         store.async_save_settings = AsyncMock()
         hass.data = {"roommind": {"store": store}}
         hass.states.get = MagicMock(
-            side_effect=make_mock_states_get(temp="69.8"),  # 69.8°F ≈ 21°C
+            side_effect=make_mock_states_get(temp="69.8", temp_unit="°F"),  # 69.8°F ≈ 21°C
         )
         hass.services.async_call = AsyncMock()
 

@@ -4,9 +4,32 @@ from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 
 
-def ha_temp_to_celsius(hass: HomeAssistant, value: float) -> float:
-    """Convert temperature from HA unit system to Celsius."""
-    if hass.config.units.temperature_unit == UnitOfTemperature.FAHRENHEIT:
+def _is_fahrenheit(hass: HomeAssistant, entity_id: str | None = None) -> bool:
+    """Check if the value is in Fahrenheit.
+
+    When *entity_id* is provided the entity's own ``unit_of_measurement``
+    attribute is used.  This is race-condition-safe during HA unit-system
+    changes because entity state + attributes are always updated atomically.
+    Falls back to the global HA config when no entity is given.
+    """
+    if entity_id:
+        state = hass.states.get(entity_id)
+        if state:
+            uom = state.attributes.get("unit_of_measurement")
+            if uom:
+                return uom == "°F"
+    return hass.config.units.temperature_unit == UnitOfTemperature.FAHRENHEIT
+
+
+def ha_temp_to_celsius(
+    hass: HomeAssistant, value: float, *, entity_id: str | None = None,
+) -> float:
+    """Convert temperature from HA unit system to Celsius.
+
+    Pass *entity_id* when reading from a sensor entity to avoid race
+    conditions during unit-system changes.
+    """
+    if _is_fahrenheit(hass, entity_id):
         return (value - 32) * 5 / 9
     return value
 
