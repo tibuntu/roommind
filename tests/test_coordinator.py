@@ -2275,3 +2275,328 @@ class TestFahrenheitConversion:
         expected_f = HEATING_BOOST_TARGET * 9 / 5 + 32  # 86°F
         temp_arg = set_temp_calls[0][0][2]["temperature"]
         assert temp_arg == pytest.approx(expected_f)
+
+
+# ---------------------------------------------------------------------------
+# Static / helper method tests (outside the class to avoid large nesting)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractCloudSeries:
+    """Tests for _extract_cloud_series."""
+
+    def test_empty_forecast(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        assert coordinator._extract_cloud_series([]) is None
+
+    def test_all_none_cloud(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        forecast = [{"temperature": 5}, {"temperature": 6}]
+        assert coordinator._extract_cloud_series(forecast) is None
+
+    def test_some_valid_cloud(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        forecast = [
+            {"temperature": 5, "cloud_coverage": 50},
+            {"temperature": 6},
+            {"temperature": 7, "cloud_coverage": 80},
+        ]
+        result = coordinator._extract_cloud_series(forecast)
+        assert result == [50.0, None, 80.0]
+
+
+class TestConvertForecastTemps:
+    """Tests for _convert_forecast_temps."""
+
+    def test_with_temperature(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        forecasts = [{"temperature": 5.0, "other": "val"}, {"temperature": 10.0}]
+        result = coordinator._convert_forecast_temps(forecasts)
+        assert result[0]["temperature"] == 5.0
+        assert result[0]["other"] == "val"
+        assert result[1]["temperature"] == 10.0
+
+    def test_without_temperature(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        forecasts = [{"cloud_coverage": 50}]
+        result = coordinator._convert_forecast_temps(forecasts)
+        assert result == [{"cloud_coverage": 50}]
+
+
+class TestReadDeviceTemp:
+    """Tests for _read_device_temp."""
+
+    def test_reads_from_thermostat(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        state = MagicMock()
+        state.attributes = {"current_temperature": 21.5}
+        hass.states.get = MagicMock(return_value=state)
+
+        room = {"thermostats": ["climate.trv1"], "acs": []}
+        assert coordinator._read_device_temp(room) == 21.5
+
+    def test_reads_from_ac_when_no_thermostat(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        state = MagicMock()
+        state.attributes = {"current_temperature": 25.0}
+        hass.states.get = MagicMock(return_value=state)
+
+        room = {"thermostats": [], "acs": ["climate.ac1"]}
+        assert coordinator._read_device_temp(room) == 25.0
+
+    def test_no_devices(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        room = {"thermostats": [], "acs": []}
+        assert coordinator._read_device_temp(room) is None
+
+    def test_state_is_none(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        hass.states.get = MagicMock(return_value=None)
+        room = {"thermostats": ["climate.trv1"], "acs": []}
+        assert coordinator._read_device_temp(room) is None
+
+    def test_invalid_temperature_value(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        state = MagicMock()
+        state.attributes = {"current_temperature": "unknown"}
+        hass.states.get = MagicMock(return_value=state)
+
+        room = {"thermostats": ["climate.trv1"], "acs": []}
+        assert coordinator._read_device_temp(room) is None
+
+    def test_no_current_temp_attribute(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        state = MagicMock()
+        state.attributes = {"temperature": 21.0}  # different key
+        hass.states.get = MagicMock(return_value=state)
+
+        room = {"thermostats": ["climate.trv1"], "acs": []}
+        assert coordinator._read_device_temp(room) is None
+
+
+class TestFlushEkfAccumulator:
+    """Tests for _flush_ekf_accumulator."""
+
+    def test_no_accumulated_data(self, hass, mock_config_entry):
+        """Flush with no accumulated data is a no-op."""
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        # Should not raise
+        coordinator._flush_ekf_accumulator("room_a", 20.0, 5.0, {"thermostats": [], "acs": []})
+
+    def test_accumulated_without_mode(self, hass, mock_config_entry):
+        """Flush with accumulated dt but no mode is a no-op."""
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        coordinator._ekf_accumulated_dt["room_a"] = 3.0
+        # prev_mode not set -> should not call update
+        coordinator._flush_ekf_accumulator("room_a", 20.0, 5.0, {"thermostats": [], "acs": []})
+
+    def test_accumulated_with_mode_calls_update(self, hass, mock_config_entry):
+        """Flush with accumulated data and mode calls model update."""
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        coordinator._ekf_accumulated_dt["room_a"] = 3.0
+        coordinator._ekf_accumulated_mode["room_a"] = "heating"
+        coordinator._ekf_accumulated_pf["room_a"] = 0.8
+
+        with patch.object(coordinator._model_manager, "update") as mock_update:
+            coordinator._flush_ekf_accumulator("room_a", 20.0, 5.0, {"thermostats": [], "acs": []})
+            mock_update.assert_called_once()
+
+
+class TestReadWeatherForecast:
+    """Tests for _read_weather_forecast."""
+
+    @pytest.mark.asyncio
+    async def test_no_weather_entity(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        result = await coordinator._read_weather_forecast({})
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_empty_weather_entity(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        result = await coordinator._read_weather_forecast({"weather_entity": ""})
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_modern_service_success(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        hass.services.async_call = AsyncMock(return_value={
+            "weather.home": {
+                "forecast": [
+                    {"temperature": 5.0, "cloud_coverage": 50},
+                    {"temperature": 6.0, "cloud_coverage": 80},
+                ]
+            }
+        })
+        result = await coordinator._read_weather_forecast({"weather_entity": "weather.home"})
+        assert len(result) == 2
+        assert result[0]["temperature"] == 5.0
+
+    @pytest.mark.asyncio
+    async def test_modern_service_fails_fallback_to_state(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        hass.services.async_call = AsyncMock(side_effect=RuntimeError("not supported"))
+        state = MagicMock()
+        state.attributes = {
+            "forecast": [{"temperature": 7.0}]
+        }
+        hass.states.get = MagicMock(return_value=state)
+
+        result = await coordinator._read_weather_forecast({"weather_entity": "weather.home"})
+        assert len(result) == 1
+        assert result[0]["temperature"] == 7.0
+
+    @pytest.mark.asyncio
+    async def test_fallback_state_is_none(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        hass.services.async_call = AsyncMock(side_effect=RuntimeError("fail"))
+        hass.states.get = MagicMock(return_value=None)
+
+        result = await coordinator._read_weather_forecast({"weather_entity": "weather.home"})
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_fallback_no_forecast_attribute(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        hass.services.async_call = AsyncMock(side_effect=RuntimeError("fail"))
+        state = MagicMock()
+        state.attributes = {}
+        hass.states.get = MagicMock(return_value=state)
+
+        result = await coordinator._read_weather_forecast({"weather_entity": "weather.home"})
+        assert result == []
+
+
+class TestValveProtectionFinish:
+    """Tests for _async_valve_protection_finish."""
+
+    @pytest.mark.asyncio
+    async def test_no_cycling_is_noop(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        # No cycling entries -> should return immediately
+        await coordinator._async_valve_protection_finish()
+        hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_finishes_expired_cycle(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        hass.services.async_call = AsyncMock()
+        # Valve has been cycling for longer than VALVE_PROTECTION_CYCLE_DURATION
+        coordinator._valve_cycling["climate.trv1"] = time.time() - 120
+
+        await coordinator._async_valve_protection_finish()
+
+        assert "climate.trv1" not in coordinator._valve_cycling
+        assert "climate.trv1" in coordinator._valve_last_actuation
+        assert coordinator._valve_actuation_dirty is True
+
+    @pytest.mark.asyncio
+    async def test_finish_exception_still_cleans_up(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        hass.services.async_call = AsyncMock(side_effect=RuntimeError("fail"))
+        coordinator._valve_cycling["climate.trv1"] = time.time() - 120
+
+        await coordinator._async_valve_protection_finish()
+
+        # Still cleaned up despite exception
+        assert "climate.trv1" not in coordinator._valve_cycling
+        assert "climate.trv1" in coordinator._valve_last_actuation
+
+
+class TestValveProtectionCheck:
+    """Tests for _async_valve_protection_check."""
+
+    @pytest.mark.asyncio
+    async def test_disabled_clears_active_cycles(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        hass.services.async_call = AsyncMock()
+        coordinator._valve_cycling["climate.trv1"] = time.time()
+
+        settings = {"valve_protection_enabled": False}
+        await coordinator._async_valve_protection_check({}, settings)
+
+        assert len(coordinator._valve_cycling) == 0
+
+    @pytest.mark.asyncio
+    async def test_starts_cycling_stale_valve(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        hass.services.async_call = AsyncMock()
+        eid_state = MagicMock()
+        eid_state.attributes = {"max_temp": 30}
+        hass.states.get = MagicMock(return_value=eid_state)
+
+        rooms = {"room_a": {"thermostats": ["climate.trv1"]}}
+        settings = {"valve_protection_enabled": True, "valve_protection_interval_days": 7}
+
+        # Valve was last actuated > 7 days ago
+        coordinator._valve_last_actuation["climate.trv1"] = time.time() - 8 * 86400
+
+        await coordinator._async_valve_protection_check(rooms, settings)
+
+        assert "climate.trv1" in coordinator._valve_cycling
+        assert hass.services.async_call.call_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_skips_already_cycling(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        hass.services.async_call = AsyncMock()
+
+        rooms = {"room_a": {"thermostats": ["climate.trv1"]}}
+        settings = {"valve_protection_enabled": True, "valve_protection_interval_days": 7}
+
+        # Already cycling
+        coordinator._valve_cycling["climate.trv1"] = time.time()
+        coordinator._valve_last_actuation["climate.trv1"] = time.time() - 8 * 86400
+
+        await coordinator._async_valve_protection_check(rooms, settings)
+
+        # Should not call any service (already cycling)
+        hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cleans_up_stale_entries(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        hass.services.async_call = AsyncMock()
+
+        # Entity in actuation dict but not in any room
+        coordinator._valve_last_actuation["climate.old_trv"] = time.time()
+        rooms = {"room_a": {"thermostats": ["climate.trv1"]}}
+        settings = {"valve_protection_enabled": True, "valve_protection_interval_days": 7}
+
+        await coordinator._async_valve_protection_check(rooms, settings)
+
+        assert "climate.old_trv" not in coordinator._valve_last_actuation
+        assert coordinator._valve_actuation_dirty is True
+
+
+class TestComputeTrvSetpoint:
+    """Tests for _compute_trv_setpoint static method."""
+
+    def test_idle_returns_none(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        result = coordinator._compute_trv_setpoint("idle", 0.5, 20.0, 21.0, True)
+        assert result is None
+
+    def test_no_external_sensor_returns_none(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        result = coordinator._compute_trv_setpoint("heating", 0.5, 20.0, 21.0, False)
+        assert result is None
+
+    def test_none_current_temp_returns_none(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        result = coordinator._compute_trv_setpoint("heating", 0.5, None, 21.0, True)
+        assert result is None
+
+    def test_heating_computes_setpoint(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        # power_fraction=0.5, current=20, target=21, boost=30
+        # trv = 20 + 0.5 * (30 - 20) = 25.0
+        result = coordinator._compute_trv_setpoint("heating", 0.5, 20.0, 21.0, True)
+        assert result == 25.0
+
+    def test_heating_floor_at_target(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        # power_fraction=0.01, current=20, target=21
+        # trv = 20 + 0.01 * (30 - 20) = 20.1 → clamped to target 21.0
+        result = coordinator._compute_trv_setpoint("heating", 0.01, 20.0, 21.0, True)
+        assert result == 21.0

@@ -152,3 +152,165 @@ def test_rotate_moves_old_to_history(history_dir):
     history = store.read_history("room_a")
     assert len(detail) == 3  # only recent rows remain
     assert len(history) >= 1  # old rows downsampled to history
+
+
+# ---------------------------------------------------------------------------
+# Timestamp-based filtering
+# ---------------------------------------------------------------------------
+
+
+def test_read_detail_with_start_ts(history_dir):
+    """start_ts filters out rows before the given timestamp."""
+    store = HistoryStore(history_dir)
+    for i in range(5):
+        store.record("room_a", {
+            "room_temp": 20.0,
+            "outdoor_temp": 5.0,
+            "target_temp": 21.0,
+            "mode": "idle",
+            "predicted_temp": 20.0,
+        }, timestamp=1000.0 + i * 100)
+
+    rows = store.read_detail("room_a", start_ts=1200.0)
+    assert len(rows) == 3  # ts 1200, 1300, 1400
+
+
+def test_read_detail_with_end_ts(history_dir):
+    """end_ts filters out rows after the given timestamp."""
+    store = HistoryStore(history_dir)
+    for i in range(5):
+        store.record("room_a", {
+            "room_temp": 20.0,
+            "outdoor_temp": 5.0,
+            "target_temp": 21.0,
+            "mode": "idle",
+            "predicted_temp": 20.0,
+        }, timestamp=1000.0 + i * 100)
+
+    rows = store.read_detail("room_a", end_ts=1200.0)
+    assert len(rows) == 3  # ts 1000, 1100, 1200
+
+
+def test_read_detail_with_start_and_end_ts(history_dir):
+    """Both start_ts and end_ts filter rows to a range."""
+    store = HistoryStore(history_dir)
+    for i in range(5):
+        store.record("room_a", {
+            "room_temp": 20.0,
+            "outdoor_temp": 5.0,
+            "target_temp": 21.0,
+            "mode": "idle",
+            "predicted_temp": 20.0,
+        }, timestamp=1000.0 + i * 100)
+
+    rows = store.read_detail("room_a", start_ts=1100.0, end_ts=1300.0)
+    assert len(rows) == 3  # ts 1100, 1200, 1300
+
+
+def test_read_detail_start_ts_overrides_max_age(history_dir):
+    """start_ts takes precedence over max_age."""
+    store = HistoryStore(history_dir)
+    now = time.time()
+    # Write rows: 2 old, 3 recent
+    for i in range(5):
+        store.record("room_a", {
+            "room_temp": 20.0,
+            "outdoor_temp": 5.0,
+            "target_temp": 21.0,
+            "mode": "idle",
+            "predicted_temp": 20.0,
+        }, timestamp=1000.0 + i * 100)
+
+    # start_ts=1200 should override max_age and return rows from 1200+
+    rows = store.read_detail("room_a", start_ts=1200.0, max_age=99999999)
+    assert len(rows) == 3
+
+
+# ---------------------------------------------------------------------------
+# Corrupt timestamp handling
+# ---------------------------------------------------------------------------
+
+
+def test_read_detail_skips_corrupt_timestamps(history_dir):
+    """Rows with non-numeric timestamps are silently skipped."""
+    store = HistoryStore(history_dir)
+    store.record("room_a", {"room_temp": 20.0, "outdoor_temp": 5.0, "target_temp": 21.0, "mode": "idle", "predicted_temp": 20.0}, timestamp=1000.0)
+
+    # Manually write a corrupt row
+    path = store._detail_path("room_a")
+    with open(path, "a") as f:
+        f.write("bad_ts,20.0,5.0,21.0,idle,20.0,,,,\n")
+
+    store.record("room_a", {"room_temp": 21.0, "outdoor_temp": 5.0, "target_temp": 21.0, "mode": "idle", "predicted_temp": 21.0}, timestamp=2000.0)
+
+    # With filtering (max_age triggers timestamp parsing)
+    rows = store.read_detail("room_a", start_ts=500.0)
+    # Should have 2 valid rows, corrupt one skipped
+    assert len(rows) == 2
+
+
+def test_rotate_skips_corrupt_timestamps(history_dir):
+    """Rotate silently skips rows with corrupt timestamps."""
+    store = HistoryStore(history_dir)
+    now = time.time()
+    store.record("room_a", {"room_temp": 20.0, "outdoor_temp": 5.0, "target_temp": 21.0, "mode": "idle", "predicted_temp": 20.0}, timestamp=now)
+
+    # Write a corrupt row
+    path = store._detail_path("room_a")
+    with open(path, "a") as f:
+        f.write("not_a_number,20.0,5.0,21.0,idle,20.0,,,,\n")
+
+    # Should not raise
+    store.rotate("room_a")
+    rows = store.read_detail("room_a")
+    assert len(rows) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Downsample edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_downsample_empty(history_dir):
+    """Empty input returns empty output."""
+    store = HistoryStore(history_dir)
+    assert store._downsample([], bucket_seconds=300) == []
+
+
+def test_downsample_non_numeric_values(history_dir):
+    """Non-numeric field values produce empty string in output."""
+    store = HistoryStore(history_dir)
+    rows = [
+        {"timestamp": "1000", "room_temp": "abc", "outdoor_temp": "5.0",
+         "target_temp": "21.0", "mode": "idle", "predicted_temp": "20.0",
+         "window_open": "", "heating_power": "", "solar_irradiance": ""},
+    ]
+    result = store._downsample(rows, bucket_seconds=300)
+    assert len(result) == 1
+    assert result[0]["room_temp"] == ""  # non-numeric → empty
+    assert result[0]["outdoor_temp"] == 5.0
+
+
+# ---------------------------------------------------------------------------
+# _safe_ts edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_safe_ts_valid():
+    """Valid timestamp returns float."""
+    assert HistoryStore._safe_ts({"timestamp": "1234.5"}) == 1234.5
+
+
+def test_safe_ts_missing_key():
+    """Missing timestamp key returns 0.0."""
+    assert HistoryStore._safe_ts({}) == 0.0
+
+
+def test_safe_ts_non_numeric():
+    """Non-numeric timestamp returns 0.0."""
+    assert HistoryStore._safe_ts({"timestamp": "abc"}) == 0.0
+
+
+def test_safe_ts_none_value():
+    """None timestamp returns 0.0."""
+    assert HistoryStore._safe_ts({"timestamp": None}) == 0.0

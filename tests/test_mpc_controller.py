@@ -5,7 +5,15 @@ from __future__ import annotations
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
-from custom_components.roommind.mpc_controller import MPCController, check_acs_can_heat
+from custom_components.roommind.mpc_controller import (
+    MPCController,
+    async_turn_off_climate,
+    check_acs_can_heat,
+    MODE_COOLING,
+    MODE_HEATING,
+    MODE_IDLE,
+)
+from custom_components.roommind.mpc_optimizer import MPCPlan
 from custom_components.roommind.thermal_model import RoomModelManager, RCModel
 
 
@@ -1390,3 +1398,833 @@ async def test_managed_mode_auto_trv_and_heat_cool_ac():
     ac_temp = [c for c in calls if c[0][1] == "set_temperature" and c[0][2].get("entity_id") == "climate.hp"]
     assert trv_temp and trv_temp[0][0][2]["temperature"] == 21.0
     assert ac_temp and ac_temp[0][0][2]["temperature"] == 21.0
+
+
+# ---------------------------------------------------------------------------
+# async_turn_off_climate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_turn_off_already_off():
+    """Device already off is a no-op."""
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "off"
+    state.attributes = {"hvac_modes": ["heat", "off"]}
+    hass.states.get = MagicMock(return_value=state)
+
+    await async_turn_off_climate(hass, "climate.trv1", area_id="room_a")
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_turn_off_calls_set_hvac_mode_off():
+    """Normal device gets set_hvac_mode(off)."""
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {"hvac_modes": ["heat", "off"]}
+    hass.states.get = MagicMock(return_value=state)
+
+    await async_turn_off_climate(hass, "climate.trv1", area_id="room_a")
+    hass.services.async_call.assert_called_once()
+    call_args = hass.services.async_call.call_args[0]
+    assert call_args[1] == "set_hvac_mode"
+    assert call_args[2]["hvac_mode"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_turn_off_set_hvac_mode_exception():
+    """Exception in set_hvac_mode(off) is caught, doesn't raise."""
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {"hvac_modes": ["heat", "off"]}
+    hass.states.get = MagicMock(return_value=state)
+    hass.services.async_call = AsyncMock(side_effect=RuntimeError("service error"))
+
+    # Should not raise
+    await async_turn_off_climate(hass, "climate.trv1", area_id="room_a")
+
+
+@pytest.mark.asyncio
+async def test_turn_off_fallback_to_min_temp():
+    """Heat-only device without 'off' mode uses min_temp fallback."""
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {"hvac_modes": ["heat"], "min_temp": 5.0, "temperature": 21.0}
+    hass.states.get = MagicMock(return_value=state)
+
+    await async_turn_off_climate(hass, "climate.trv1", area_id="room_a")
+    call_args = hass.services.async_call.call_args[0]
+    assert call_args[1] == "set_temperature"
+    assert call_args[2]["temperature"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_turn_off_fallback_redundant_skip():
+    """Heat-only device already at min_temp is a no-op."""
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {"hvac_modes": ["heat"], "min_temp": 5.0, "temperature": 5.0}
+    hass.states.get = MagicMock(return_value=state)
+
+    await async_turn_off_climate(hass, "climate.trv1", area_id="room_a")
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_turn_off_cooling_device_uses_max_temp():
+    """Cool-only device without 'off' uses max_temp fallback."""
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "cool"
+    state.attributes = {"hvac_modes": ["cool"], "max_temp": 30.0, "temperature": 24.0}
+    hass.states.get = MagicMock(return_value=state)
+
+    await async_turn_off_climate(hass, "climate.trv1", area_id="room_a")
+    call_args = hass.services.async_call.call_args[0]
+    assert call_args[1] == "set_temperature"
+    assert call_args[2]["temperature"] == 30.0
+
+
+@pytest.mark.asyncio
+async def test_turn_off_no_min_temp_attribute():
+    """Heat-only device without min_temp attribute logs warning, returns."""
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {"hvac_modes": ["heat"]}
+    hass.states.get = MagicMock(return_value=state)
+
+    await async_turn_off_climate(hass, "climate.trv1", area_id="room_a")
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_turn_off_fallback_set_temperature_exception():
+    """Exception in fallback set_temperature is caught."""
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {"hvac_modes": ["heat"], "min_temp": 5.0, "temperature": 21.0}
+    hass.states.get = MagicMock(return_value=state)
+    hass.services.async_call = AsyncMock(side_effect=RuntimeError("service error"))
+
+    # Should not raise
+    await async_turn_off_climate(hass, "climate.trv1", area_id="room_a")
+
+
+@pytest.mark.asyncio
+async def test_turn_off_no_state():
+    """Entity with no state (None) treats as modes unknown and tries off."""
+    hass = build_hass()
+    hass.states.get = MagicMock(return_value=None)
+
+    await async_turn_off_climate(hass, "climate.trv1", area_id="room_a")
+    hass.services.async_call.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _evaluate_bangbang hysteresis
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bangbang_heating_stickiness():
+    """In heating mode, stays heating until at target."""
+    hass = build_hass()
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+    )
+    ctrl.previous_mode = MODE_HEATING
+    mode = ctrl._evaluate_bangbang(20.0, 21.0)
+    assert mode == MODE_HEATING
+
+
+@pytest.mark.asyncio
+async def test_bangbang_heating_reaches_target():
+    """In heating mode, switches to idle at target."""
+    hass = build_hass()
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+    )
+    ctrl.previous_mode = MODE_HEATING
+    mode = ctrl._evaluate_bangbang(21.5, 21.0)
+    assert mode == MODE_IDLE
+
+
+@pytest.mark.asyncio
+async def test_bangbang_cooling_stickiness():
+    """In cooling mode, stays cooling until at target."""
+    hass = build_hass()
+    room = make_room(acs=["climate.ac1"], climate_mode="cool_only")
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=30.0, settings={}, has_external_sensor=True,
+    )
+    ctrl.previous_mode = MODE_COOLING
+    mode = ctrl._evaluate_bangbang(25.0, 23.0)
+    assert mode == MODE_COOLING
+
+
+@pytest.mark.asyncio
+async def test_bangbang_cooling_reaches_target():
+    """In cooling mode, switches to idle at target."""
+    hass = build_hass()
+    room = make_room(acs=["climate.ac1"], climate_mode="cool_only")
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=30.0, settings={}, has_external_sensor=True,
+    )
+    ctrl.previous_mode = MODE_COOLING
+    mode = ctrl._evaluate_bangbang(22.5, 23.0)
+    assert mode == MODE_IDLE
+
+
+@pytest.mark.asyncio
+async def test_bangbang_idle_to_heating():
+    """From idle, starts heating below threshold."""
+    hass = build_hass()
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+    )
+    ctrl.previous_mode = MODE_IDLE
+    mode = ctrl._evaluate_bangbang(20.0, 21.0)
+    assert mode == MODE_HEATING
+
+
+@pytest.mark.asyncio
+async def test_bangbang_idle_to_cooling():
+    """From idle, starts cooling above threshold."""
+    hass = build_hass()
+    room = make_room(acs=["climate.ac1"], climate_mode="cool_only")
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=30.0, settings={}, has_external_sensor=True,
+    )
+    ctrl.previous_mode = MODE_IDLE
+    mode = ctrl._evaluate_bangbang(24.0, 23.0)
+    assert mode == MODE_COOLING
+
+
+@pytest.mark.asyncio
+async def test_bangbang_idle_deadband():
+    """Within deadband from idle, stays idle."""
+    hass = build_hass()
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+    )
+    ctrl.previous_mode = MODE_IDLE
+    mode = ctrl._evaluate_bangbang(20.9, 21.0)
+    assert mode == MODE_IDLE
+
+
+@pytest.mark.asyncio
+async def test_bangbang_none_inputs():
+    """None inputs return idle."""
+    hass = build_hass()
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+    )
+    assert ctrl._evaluate_bangbang(None, 21.0) == MODE_IDLE
+    assert ctrl._evaluate_bangbang(20.0, None) == MODE_IDLE
+
+
+# ---------------------------------------------------------------------------
+# _evaluate_mpc edge cases
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_evaluate_mpc_none_inputs():
+    """None current_temp or target_temp returns idle."""
+    hass = build_hass()
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+    )
+    mode, pf = ctrl._evaluate_mpc(None, 21.0)
+    assert mode == MODE_IDLE
+    assert pf == 0.0
+
+    mode, pf = ctrl._evaluate_mpc(20.0, None)
+    assert mode == MODE_IDLE
+    assert pf == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _build_outdoor_series
+# ---------------------------------------------------------------------------
+
+
+def test_outdoor_series_no_forecast():
+    """Without forecast, returns constant series."""
+    hass = build_hass()
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+    )
+    series = ctrl._build_outdoor_series(10)
+    assert series == [5.0] * 10
+
+
+def test_outdoor_series_none_outdoor_temp():
+    """Without outdoor temp and no forecast, uses fallback."""
+    hass = build_hass()
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=None, settings={}, has_external_sensor=True,
+    )
+    series = ctrl._build_outdoor_series(10)
+    assert len(series) == 10
+    assert all(t == series[0] for t in series)  # all the same fallback
+
+
+def test_outdoor_series_with_forecast():
+    """With forecast, uses forecast temps extended to fill horizon."""
+    hass = build_hass()
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+    )
+    ctrl.outdoor_forecast = [
+        {"temperature": 6.0},
+        {"temperature": 7.0},
+        {"temperature": 8.0},
+    ]
+    series = ctrl._build_outdoor_series(5)
+    assert series[0] == 6.0
+    assert series[1] == 7.0
+    assert series[2] == 8.0
+    assert series[3] == 8.0  # extended with last
+    assert series[4] == 8.0
+
+
+# ---------------------------------------------------------------------------
+# async_apply edge cases
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_mode_not_idle_but_target_none():
+    """Non-idle mode with None target falls back to idle."""
+    hass = build_hass()
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+    )
+    await ctrl.async_apply("heating", target_temp=None)
+    # Should have called set_hvac_mode off (idle) for all devices
+    calls = hass.services.async_call.call_args_list
+    for c in calls:
+        if c[0][1] == "set_hvac_mode":
+            assert c[0][2]["hvac_mode"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_apply_cooling_turns_off_thermostats():
+    """Cooling mode turns off thermostats and cools ACs."""
+    hass = build_hass()
+    room = make_room(
+        acs=["climate.ac1"],
+        climate_mode="cool_only",
+    )
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=30.0, settings={}, has_external_sensor=True,
+    )
+
+    await ctrl.async_apply("cooling", target_temp=23.0)
+    calls = hass.services.async_call.call_args_list
+
+    # AC should be set to cool
+    ac_modes = [c for c in calls if c[0][2].get("entity_id") == "climate.ac1" and c[0][1] == "set_hvac_mode"]
+    assert any(c[0][2]["hvac_mode"] == "cool" for c in ac_modes)
+
+    # TRV should be turned off
+    trv_calls = [c for c in calls if c[0][2].get("entity_id") == "climate.living_trv"]
+    # "off" is delegated to async_turn_off_climate which calls set_hvac_mode
+    if trv_calls:
+        assert any(c[0][2].get("hvac_mode") == "off" for c in trv_calls if c[0][1] == "set_hvac_mode")
+
+
+@pytest.mark.asyncio
+async def test_apply_managed_mode_ac_heat_only():
+    """Managed mode AC with only 'heat' mode gets heat + target temp."""
+    hass = build_hass()
+    ac_state = MagicMock()
+    ac_state.state = "off"
+    ac_state.attributes = {"hvac_modes": ["heat"], "temperature": None}
+    hass.states.get = MagicMock(return_value=ac_state)
+
+    room = make_room(
+        thermostats=[],
+        acs=["climate.ac1"],
+        climate_mode="auto",
+        temperature_sensor="",  # no external sensor
+    )
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=False,
+    )
+
+    await ctrl.async_apply("heating", target_temp=21.0)
+    calls = hass.services.async_call.call_args_list
+
+    ac_hvac = [c for c in calls if c[0][2].get("entity_id") == "climate.ac1" and c[0][1] == "set_hvac_mode"]
+    assert any(c[0][2]["hvac_mode"] == "heat" for c in ac_hvac)
+
+
+@pytest.mark.asyncio
+async def test_apply_managed_mode_ac_no_compatible_mode_turns_off():
+    """Managed mode AC with no compatible mode attempts turn-off (warning if no off/min_temp)."""
+    hass = build_hass()
+    ac_state = MagicMock()
+    ac_state.state = "fan_only"
+    ac_state.attributes = {"hvac_modes": ["fan_only"], "temperature": None}
+    hass.states.get = MagicMock(return_value=ac_state)
+
+    room = make_room(
+        thermostats=[],
+        acs=["climate.ac1"],
+        climate_mode="auto",
+        temperature_sensor="",
+    )
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=False,
+    )
+
+    await ctrl.async_apply("heating", target_temp=21.0)
+    # Device has no 'off' mode and no min_temp, so async_turn_off_climate
+    # logs a warning and returns without calling any service
+    hass.services.async_call.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _call redundancy skip
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_call_skips_redundant_temperature():
+    """Redundant set_temperature is skipped."""
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {"hvac_modes": ["heat", "off"], "temperature": 21.0, "min_temp": 5, "max_temp": 30}
+    hass.states.get = MagicMock(return_value=state)
+
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+    )
+    await ctrl._call("set_temperature", {"entity_id": "climate.living_trv", "temperature": 21.0})
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_call_skips_redundant_hvac_mode():
+    """Redundant set_hvac_mode is skipped."""
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {"hvac_modes": ["heat", "off"]}
+    hass.states.get = MagicMock(return_value=state)
+
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+    )
+    await ctrl._call("set_hvac_mode", {"entity_id": "climate.living_trv", "hvac_mode": "heat"})
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_call_service_exception_caught():
+    """Exception in service call is caught."""
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "off"
+    state.attributes = {"hvac_modes": ["heat", "off"], "temperature": 20.0, "min_temp": 5, "max_temp": 30}
+    hass.states.get = MagicMock(return_value=state)
+    hass.services.async_call = AsyncMock(side_effect=RuntimeError("fail"))
+
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+    )
+    # Should not raise
+    await ctrl._call("set_temperature", {"entity_id": "climate.living_trv", "temperature": 25.0})
+
+
+@pytest.mark.asyncio
+async def test_call_clamps_to_device_max():
+    """Temperature is clamped to device max_temp."""
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {"hvac_modes": ["heat", "off"], "temperature": 20.0, "min_temp": 5, "max_temp": 25}
+    hass.states.get = MagicMock(return_value=state)
+
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+    )
+    await ctrl._call("set_temperature", {"entity_id": "climate.living_trv", "temperature": 30.0})
+    # Should have been clamped to 25
+    call_args = hass.services.async_call.call_args[0]
+    assert call_args[2]["temperature"] == 25
+
+
+# ---------------------------------------------------------------------------
+# _has_enough_data cooling path
+# ---------------------------------------------------------------------------
+
+
+def test_has_enough_data_insufficient_cooling():
+    """Returns False when cooling data is insufficient."""
+    hass = build_hass()
+    room = make_room(acs=["climate.ac1"], climate_mode="cool_only")
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=30.0, settings={}, has_external_sensor=True,
+    )
+    # Model has no data
+    assert ctrl._has_enough_data(can_heat=False, can_cool=True) is False
+
+
+def test_has_enough_data_enough_idle_but_not_cooling():
+    """Returns False when idle is sufficient but cooling data not."""
+    hass = build_hass()
+    room = make_room(acs=["climate.ac1"], climate_mode="cool_only")
+    mgr = RoomModelManager()
+    # Feed enough idle data (>= 60 updates)
+    for _ in range(65):
+        mgr.update("living_room", 20.0, 5.0, "idle", 3.0)
+    # A few cooling updates (< 20)
+    for _ in range(5):
+        mgr.update("living_room", 25.0, 30.0, "cooling", 3.0, can_cool=True)
+
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=30.0, settings={}, has_external_sensor=True,
+    )
+    assert ctrl._has_enough_data(can_heat=False, can_cool=True) is False
+
+
+# ---------------------------------------------------------------------------
+# _evaluate_managed_mode
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_managed_mode_none_target():
+    """Managed mode with None target returns idle."""
+    hass = build_hass()
+    room = make_room(temperature_sensor="")
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=False,
+    )
+    assert ctrl._evaluate_managed_mode(None) == MODE_IDLE
+
+
+@pytest.mark.asyncio
+async def test_managed_mode_cool_only_can_cool():
+    """Cool-only mode returns cooling when cooling is allowed."""
+    hass = build_hass()
+    room = make_room(acs=["climate.ac1"], climate_mode="cool_only")
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=30.0, settings={}, has_external_sensor=False,
+    )
+    assert ctrl._evaluate_managed_mode(23.0) == MODE_COOLING
+
+
+@pytest.mark.asyncio
+async def test_managed_mode_cool_only_gated():
+    """Cool-only mode returns idle when outdoor temp too low."""
+    hass = build_hass()
+    room = make_room(acs=["climate.ac1"], climate_mode="cool_only")
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=False,
+    )
+    assert ctrl._evaluate_managed_mode(23.0) == MODE_IDLE
+
+
+@pytest.mark.asyncio
+async def test_managed_mode_heat_only_can_heat():
+    """Heat-only mode returns heating when heating is allowed."""
+    hass = build_hass()
+    room = make_room(climate_mode="heat_only")
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=False,
+    )
+    assert ctrl._evaluate_managed_mode(21.0) == MODE_HEATING
+
+
+@pytest.mark.asyncio
+async def test_managed_mode_heat_only_gated():
+    """Heat-only mode returns idle when outdoor temp too high."""
+    hass = build_hass()
+    room = make_room(climate_mode="heat_only")
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=30.0, settings={}, has_external_sensor=False,
+    )
+    assert ctrl._evaluate_managed_mode(21.0) == MODE_IDLE
+
+
+@pytest.mark.asyncio
+async def test_managed_mode_auto_both_available():
+    """Auto mode with both heat and cool returns heating (season heuristic)."""
+    hass = build_hass()
+    # Need both TRVs and ACs, outdoor temp in a zone where both are allowed
+    room = make_room(acs=["climate.ac1"], climate_mode="auto")
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=18.0, settings={},  # between cooling_min(16) and heating_max(22)
+        has_external_sensor=False,
+    )
+    assert ctrl._evaluate_managed_mode(21.0) == MODE_HEATING
+
+
+@pytest.mark.asyncio
+async def test_managed_mode_auto_only_cool():
+    """Auto mode with only cooling available returns cooling."""
+    hass = build_hass()
+    # No thermostats, only ACs
+    room = make_room(thermostats=[], acs=["climate.ac1"], climate_mode="auto")
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=30.0, settings={}, has_external_sensor=False,
+    )
+    assert ctrl._evaluate_managed_mode(23.0) == MODE_COOLING
+
+
+@pytest.mark.asyncio
+async def test_managed_mode_auto_neither():
+    """Auto mode with neither heat nor cool returns idle."""
+    hass = build_hass()
+    room = make_room(thermostats=[], acs=[], climate_mode="auto")
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=30.0, settings={}, has_external_sensor=False,
+    )
+    assert ctrl._evaluate_managed_mode(21.0) == MODE_IDLE
+
+
+# ---------------------------------------------------------------------------
+# _evaluate_mpc safety guard
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_mpc_safety_guard_heating_above_target(monkeypatch):
+    """Safety guard overrides heating to idle when temp >= max(near_targets)."""
+    hass = build_hass()
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+    )
+    # Mock optimizer to return HEATING so the safety guard is actually tested
+    fake_plan = MPCPlan(
+        actions=[MODE_HEATING] * 6,
+        temperatures=[22.0] * 7,
+        power_fractions=[0.8] * 6,
+    )
+    monkeypatch.setattr(
+        "custom_components.roommind.mpc_controller.MPCOptimizer.optimize",
+        lambda *a, **kw: fake_plan,
+    )
+    # current_temp=22 >= target=21 → safety guard should override to idle
+    mode, pf = ctrl._evaluate_mpc(22.0, 21.0)
+    assert mode == MODE_IDLE
+    assert pf == 0.0
+
+
+def test_evaluate_mpc_safety_guard_cooling_below_target(monkeypatch):
+    """Safety guard overrides cooling to idle when temp <= min(near_targets)."""
+    hass = build_hass()
+    room = make_room(acs=["climate.ac1"], thermostats=[], climate_mode="cool_only")
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=30.0, settings={}, has_external_sensor=True,
+    )
+    # Mock optimizer to return COOLING so the safety guard is tested
+    fake_plan = MPCPlan(
+        actions=[MODE_COOLING] * 6,
+        temperatures=[22.0] * 7,
+        power_fractions=[0.8] * 6,
+    )
+    monkeypatch.setattr(
+        "custom_components.roommind.mpc_controller.MPCOptimizer.optimize",
+        lambda *a, **kw: fake_plan,
+    )
+    # current_temp=22 <= target=23 → safety guard should override to idle
+    mode, pf = ctrl._evaluate_mpc(22.0, 23.0)
+    assert mode == MODE_IDLE
+    assert pf == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _evaluate_mpc without target_resolver
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_mpc_no_target_resolver():
+    """Without target_resolver, uses flat target_series."""
+    hass = build_hass()
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+        target_resolver=None,
+    )
+    # Call _evaluate_mpc — it should use [target_temp] * horizon_blocks
+    mode, pf = ctrl._evaluate_mpc(17.0, 21.0)
+    assert mode in (MODE_HEATING, MODE_IDLE, MODE_COOLING)
+    # Should also store a last_plan
+    assert ctrl.last_plan is not None
+
+
+def test_evaluate_mpc_with_target_resolver():
+    """With target_resolver, builds target_series from resolver calls."""
+    hass = build_hass()
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+        target_resolver=lambda ts: 21.0,  # constant resolver
+    )
+    mode, pf = ctrl._evaluate_mpc(17.0, 21.0)
+    assert mode in (MODE_HEATING, MODE_IDLE, MODE_COOLING)
+    assert ctrl.last_plan is not None
+
+
+# ---------------------------------------------------------------------------
+# _build_solar_series with cloud_series
+# ---------------------------------------------------------------------------
+
+
+def test_build_solar_series_with_cloud():
+    """Cloud series is expanded to 5-min blocks and passed to build_solar_series."""
+    hass = build_hass()
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+        cloud_series=[50.0, 80.0],
+        latitude=48.0, longitude=11.0,
+    )
+    series = ctrl._build_solar_series(30)
+    assert len(series) == 30
+    # All values should be non-negative floats
+    assert all(isinstance(v, (int, float)) and v >= 0 for v in series)
+
+
+def test_build_solar_series_short_cloud_extended():
+    """Short cloud series is extended to fill n_blocks."""
+    hass = build_hass()
+    room = make_room()
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=5.0, settings={}, has_external_sensor=True,
+        cloud_series=[50.0],  # only 1 hour = 12 blocks
+        latitude=48.0, longitude=11.0,
+    )
+    series = ctrl._build_solar_series(30)
+    assert len(series) == 30
+
+
+# ---------------------------------------------------------------------------
+# Managed mode AC with "cool" in modes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_managed_mode_ac_cool_only():
+    """Managed mode AC with only 'cool' mode gets cool + target temp."""
+    hass = build_hass()
+    ac_state = MagicMock()
+    ac_state.state = "off"
+    ac_state.attributes = {"hvac_modes": ["cool"], "temperature": None}
+    hass.states.get = MagicMock(return_value=ac_state)
+
+    room = make_room(
+        thermostats=[],
+        acs=["climate.ac1"],
+        climate_mode="auto",
+        temperature_sensor="",
+    )
+    mgr = RoomModelManager()
+    ctrl = MPCController(
+        hass, room, model_manager=mgr,
+        outdoor_temp=30.0, settings={}, has_external_sensor=False,
+    )
+
+    await ctrl.async_apply("cooling", target_temp=23.0)
+    calls = hass.services.async_call.call_args_list
+    ac_hvac = [c for c in calls if c[0][2].get("entity_id") == "climate.ac1" and c[0][1] == "set_hvac_mode"]
+    assert any(c[0][2]["hvac_mode"] == "cool" for c in ac_hvac)

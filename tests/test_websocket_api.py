@@ -8,7 +8,10 @@ import pytest
 
 from custom_components.roommind.const import DOMAIN
 from custom_components.roommind.websocket_api import (
+    _csv_to_points,
+    _safe_float,
     websocket_delete_room,
+    websocket_get_analytics,
     websocket_get_settings,
     websocket_list_rooms,
     websocket_override_clear,
@@ -32,6 +35,7 @@ _get_settings = websocket_get_settings.__wrapped__
 _save_settings = websocket_save_settings.__wrapped__
 _thermal_reset = websocket_thermal_reset.__wrapped__
 _thermal_reset_all = websocket_thermal_reset_all.__wrapped__
+_get_analytics = websocket_get_analytics.__wrapped__
 
 
 @pytest.fixture
@@ -937,5 +941,335 @@ async def test_compute_target_forecast_includes_mold_delta(ws_hass):
     # All forecast points should have the delta applied
     for point in forecast_mold:
         assert point["target_temp"] == 23.0
+
+
+# ---------------------------------------------------------------------------
+# Helper function tests
+# ---------------------------------------------------------------------------
+
+
+def test_safe_float_valid():
+    assert _safe_float("21.5") == 21.5
+
+
+def test_safe_float_empty():
+    assert _safe_float("") is None
+
+
+def test_safe_float_none():
+    assert _safe_float(None) is None
+
+
+def test_safe_float_invalid():
+    assert _safe_float("abc") is None
+
+
+def test_csv_to_points_normal():
+    """Converts CSV rows with string values to typed points."""
+    rows = [
+        {"timestamp": "1000.0", "room_temp": "21.5", "outdoor_temp": "5.0",
+         "target_temp": "21.0", "mode": "heating", "predicted_temp": "21.3",
+         "window_open": "False", "heating_power": "75.0"},
+    ]
+    points = _csv_to_points(rows)
+    assert len(points) == 1
+    p = points[0]
+    assert p["ts"] == 1000.0
+    assert p["room_temp"] == 21.5
+    assert p["outdoor_temp"] == 5.0
+    assert p["target_temp"] == 21.0
+    assert p["mode"] == "heating"
+    assert p["predicted_temp"] == 21.3
+    assert p["window_open"] is False
+    assert p["heating_power"] == 75.0
+
+
+def test_csv_to_points_window_open_true():
+    rows = [
+        {"timestamp": "1000", "room_temp": "21", "outdoor_temp": "5",
+         "target_temp": "21", "mode": "idle", "predicted_temp": "",
+         "window_open": "True", "heating_power": ""},
+    ]
+    points = _csv_to_points(rows)
+    assert points[0]["window_open"] is True
+
+
+def test_csv_to_points_skips_bad_timestamp():
+    rows = [
+        {"timestamp": "bad", "room_temp": "21", "outdoor_temp": "5",
+         "target_temp": "21", "mode": "idle", "predicted_temp": "",
+         "window_open": "", "heating_power": ""},
+        {"timestamp": "1000", "room_temp": "21", "outdoor_temp": "5",
+         "target_temp": "21", "mode": "idle", "predicted_temp": "",
+         "window_open": "", "heating_power": ""},
+    ]
+    points = _csv_to_points(rows)
+    assert len(points) == 1
+
+
+def test_csv_to_points_empty():
+    assert _csv_to_points([]) == []
+
+
+# ---------------------------------------------------------------------------
+# Analytics handler tests
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_estimator(**overrides):
+    """Build a mock ThermalEKF estimator with sensible defaults."""
+    est = MagicMock()
+    est._n_updates = overrides.get("n_updates", 200)
+    est._n_idle = overrides.get("n_idle", 120)
+    est._n_heating = overrides.get("n_heating", 60)
+    est._n_cooling = overrides.get("n_cooling", 20)
+    est._applicable_modes = overrides.get("applicable_modes", {"idle", "heating"})
+    est._P = overrides.get("P", [[0.01 * (i == j) for j in range(5)] for i in range(5)])
+    est.confidence = overrides.get("confidence", 0.85)
+    est.prediction_std.return_value = overrides.get("prediction_std", 0.3)
+    rc = MagicMock()
+    rc.Q_heat = overrides.get("Q_heat", 100.0)
+    rc.to_dict.return_value = overrides.get("model_dict", {"alpha": 0.5})
+    est.get_model.return_value = rc
+    return est
+
+
+def _make_analytics_coordinator(history_rows=None, estimator=None, rooms_live=None):
+    """Build a mock coordinator for analytics tests."""
+    coordinator = MagicMock()
+    coordinator.rooms = rooms_live or {}
+    coordinator.outdoor_temp = 5.0
+    coordinator.outdoor_humidity = 60
+    coordinator._outdoor_forecast = []
+    coordinator._window_paused = {}
+
+    if history_rows is not None:
+        hs = MagicMock()
+        hs.read_detail.return_value = history_rows
+        hs.read_history.return_value = []
+        coordinator._history_store = hs
+    else:
+        coordinator._history_store = None
+
+    from custom_components.roommind.thermal_model import RoomModelManager
+    mgr = RoomModelManager()
+    if estimator:
+        mgr._estimators["room_a"] = estimator
+    coordinator._model_manager = mgr
+
+    return coordinator
+
+
+@pytest.mark.asyncio
+async def test_analytics_no_history_store(ws_hass, store, connection):
+    """Analytics returns empty data when no history store exists."""
+    await store.async_load()
+    await store.async_save_room("room_a", {"thermostats": ["climate.trv1"]})
+
+    coordinator = _make_analytics_coordinator(history_rows=None)
+    ws_hass.data[DOMAIN]["coordinator"] = coordinator
+
+    msg = {"id": 50, "type": "roommind/analytics/get", "area_id": "room_a"}
+    await _get_analytics(ws_hass, connection, msg)
+
+    result = connection.send_result.call_args[0][1]
+    assert result["detail"] == []
+    assert result["history"] == []
+
+
+@pytest.mark.asyncio
+async def test_analytics_with_range_key(ws_hass, store, connection):
+    """Analytics reads history with max_age based on range key."""
+    await store.async_load()
+    await store.async_save_room("room_a", {"thermostats": ["climate.trv1"]})
+
+    csv_rows = [
+        {"timestamp": "1000", "room_temp": "21.0", "outdoor_temp": "5.0",
+         "target_temp": "21.0", "mode": "idle", "predicted_temp": "",
+         "window_open": "", "heating_power": ""},
+    ]
+    coordinator = _make_analytics_coordinator(history_rows=csv_rows)
+    ws_hass.data[DOMAIN]["coordinator"] = coordinator
+
+    msg = {"id": 51, "type": "roommind/analytics/get", "area_id": "room_a", "range": "24h"}
+    await _get_analytics(ws_hass, connection, msg)
+
+    result = connection.send_result.call_args[0][1]
+    assert len(result["detail"]) == 1
+    assert result["detail"][0]["ts"] == 1000.0
+    # read_detail was called with max_age=86400
+    coordinator._history_store.read_detail.assert_called_once_with("room_a", max_age=86400)
+
+
+@pytest.mark.asyncio
+async def test_analytics_with_custom_timestamps(ws_hass, store, connection):
+    """Analytics reads history with custom start/end timestamps."""
+    await store.async_load()
+    await store.async_save_room("room_a", {"thermostats": ["climate.trv1"]})
+
+    csv_rows = [
+        {"timestamp": "1500", "room_temp": "21.0", "outdoor_temp": "5.0",
+         "target_temp": "21.0", "mode": "idle", "predicted_temp": "",
+         "window_open": "", "heating_power": ""},
+    ]
+    coordinator = _make_analytics_coordinator(history_rows=csv_rows)
+    ws_hass.data[DOMAIN]["coordinator"] = coordinator
+
+    msg = {
+        "id": 52, "type": "roommind/analytics/get", "area_id": "room_a",
+        "start_ts": 1000.0, "end_ts": 2000.0,
+    }
+    await _get_analytics(ws_hass, connection, msg)
+
+    result = connection.send_result.call_args[0][1]
+    assert len(result["detail"]) == 1
+    coordinator._history_store.read_detail.assert_called_once_with(
+        "room_a", start_ts=1000.0, end_ts=2000.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_analytics_no_estimator(ws_hass, store, connection):
+    """Analytics returns empty model info when no estimator exists."""
+    await store.async_load()
+    await store.async_save_room("room_a", {"thermostats": ["climate.trv1"]})
+
+    coordinator = _make_analytics_coordinator(history_rows=[])
+    ws_hass.data[DOMAIN]["coordinator"] = coordinator
+
+    msg = {"id": 53, "type": "roommind/analytics/get", "area_id": "room_a"}
+    await _get_analytics(ws_hass, connection, msg)
+
+    result = connection.send_result.call_args[0][1]
+    assert result["model"] == {}
+
+
+@pytest.mark.asyncio
+async def test_analytics_with_estimator(ws_hass, store, connection):
+    """Analytics includes model info when estimator exists."""
+    await store.async_load()
+    await store.async_save_room("room_a", {
+        "thermostats": ["climate.trv1"],
+        "temperature_sensor": "sensor.temp",
+    })
+
+    est = _make_mock_estimator()
+
+    coordinator = _make_analytics_coordinator(history_rows=[], estimator=est)
+    ws_hass.data[DOMAIN]["coordinator"] = coordinator
+
+    msg = {"id": 54, "type": "roommind/analytics/get", "area_id": "room_a"}
+    await _get_analytics(ws_hass, connection, msg)
+
+    result = connection.send_result.call_args[0][1]
+    model = result["model"]
+    assert model["confidence"] == 0.85
+    assert model["n_samples"] == 200
+    assert model["n_heating"] == 60
+    assert model["n_cooling"] == 20
+    assert "mpc_active" in model
+
+
+@pytest.mark.asyncio
+async def test_analytics_no_external_sensor_mpc_false(ws_hass, store, connection):
+    """Without external sensor, mpc_active is always False."""
+    await store.async_load()
+    await store.async_save_room("room_a", {
+        "thermostats": ["climate.trv1"],
+        "temperature_sensor": "",  # no external sensor
+    })
+
+    est = _make_mock_estimator(n_cooling=0)
+
+    coordinator = _make_analytics_coordinator(history_rows=[], estimator=est)
+    ws_hass.data[DOMAIN]["coordinator"] = coordinator
+
+    msg = {"id": 55, "type": "roommind/analytics/get", "area_id": "room_a"}
+    await _get_analytics(ws_hass, connection, msg)
+
+    result = connection.send_result.call_args[0][1]
+    assert result["model"]["mpc_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_analytics_prediction_disabled(ws_hass, store, connection):
+    """With prediction_enabled=False, pred_temps is empty."""
+    await store.async_load()
+    await store.async_save_room("room_a", {"thermostats": ["climate.trv1"]})
+    await store.async_save_settings({"prediction_enabled": False})
+
+    csv_rows = [
+        {"timestamp": "1000", "room_temp": "21.0", "outdoor_temp": "5.0",
+         "target_temp": "21.0", "mode": "idle", "predicted_temp": "",
+         "window_open": "", "heating_power": ""},
+    ]
+    coordinator = _make_analytics_coordinator(history_rows=csv_rows)
+    ws_hass.data[DOMAIN]["coordinator"] = coordinator
+
+    msg = {"id": 56, "type": "roommind/analytics/get", "area_id": "room_a"}
+    await _get_analytics(ws_hass, connection, msg)
+
+    result = connection.send_result.call_args[0][1]
+    # Forecast should have target_temp but predicted_temp should be None
+    for f in result["forecast"]:
+        assert f["predicted_temp"] is None
+
+
+@pytest.mark.asyncio
+async def test_analytics_forecast_grid_alignment(ws_hass, store, connection):
+    """Forecast timestamps are snapped to 5-min grid."""
+    await store.async_load()
+    await store.async_save_room("room_a", {"thermostats": ["climate.trv1"]})
+
+    coordinator = _make_analytics_coordinator(history_rows=[])
+    ws_hass.data[DOMAIN]["coordinator"] = coordinator
+
+    msg = {"id": 57, "type": "roommind/analytics/get", "area_id": "room_a"}
+    await _get_analytics(ws_hass, connection, msg)
+
+    result = connection.send_result.call_args[0][1]
+    for f in result["forecast"]:
+        assert f["ts"] % 300 == 0  # all timestamps on 5-min grid
+        assert f["mode"] == "forecast"
+        assert f["room_temp"] is None
+        assert f["window_open"] is False
+
+
+@pytest.mark.asyncio
+async def test_analytics_mold_delta_from_live(ws_hass, store, connection):
+    """Mold prevention delta is read from coordinator live state."""
+    await store.async_load()
+    await store.async_save_room("room_a", {
+        "thermostats": ["climate.trv1"],
+        "comfort_temp": 21.0,
+    })
+
+    coordinator = _make_analytics_coordinator(
+        history_rows=[],
+        rooms_live={"room_a": {"mold_prevention_delta": 2.0}},
+    )
+    ws_hass.data[DOMAIN]["coordinator"] = coordinator
+
+    msg = {"id": 58, "type": "roommind/analytics/get", "area_id": "room_a"}
+    await _get_analytics(ws_hass, connection, msg)
+
+    result = connection.send_result.call_args[0][1]
+    # Target forecast should include the mold delta
+    assert result["forecast"][0]["target_temp"] == 23.0
+
+
+# ---------------------------------------------------------------------------
+# Registration
+# ---------------------------------------------------------------------------
+
+
+def test_register_websocket_commands(hass):
+    """async_register_websocket_commands registers all 10 commands."""
+    from unittest.mock import patch
+    from custom_components.roommind.websocket_api import async_register_websocket_commands
+
+    with patch("custom_components.roommind.websocket_api.websocket_api.async_register_command") as mock_reg:
+        async_register_websocket_commands(hass)
+        assert mock_reg.call_count == 10
 
 
