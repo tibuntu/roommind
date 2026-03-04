@@ -2882,6 +2882,21 @@ class TestComputeTrvSetpoint:
         result = coordinator._compute_trv_setpoint("heating", 0.01, 20.0, 21.0, True)
         assert result == 21.0
 
+    def test_clamped_to_device_max_temp(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        # power_fraction=0.5, current=20 → trv = 25.0, but device max is 25
+        result = coordinator._compute_trv_setpoint("heating", 0.5, 20.0, 21.0, True, device_max_temp=25.0)
+        assert result == 25.0
+        # power_fraction=1.0, current=20 → trv = 30.0, but device max is 25
+        result = coordinator._compute_trv_setpoint("heating", 1.0, 20.0, 21.0, True, device_max_temp=25.0)
+        assert result == 25.0
+
+    def test_device_max_temp_none_no_clamping(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        # Without device_max_temp, should reach 30 (HEATING_BOOST_TARGET)
+        result = coordinator._compute_trv_setpoint("heating", 1.0, 20.0, 21.0, True, device_max_temp=None)
+        assert result == 30.0
+
 
 # ---------------------------------------------------------------------------
 # Residual heat tracking tests

@@ -585,6 +585,14 @@ class RoomMindCoordinator(DataUpdateCoordinator):
             except Exception:  # noqa: BLE001
                 mpc_active = False
 
+        # Minimum max_temp across thermostats (for UI display clamping)
+        trv_max_temps = []
+        for eid in room.get("thermostats", []):
+            st = self.hass.states.get(eid)
+            if st and st.attributes.get("max_temp") is not None:
+                trv_max_temps.append(st.attributes["max_temp"])
+        device_max_temp = min(trv_max_temps) if trv_max_temps else None
+
         return {
             "area_id": area_id,
             "current_temp": current_temp,
@@ -592,7 +600,7 @@ class RoomMindCoordinator(DataUpdateCoordinator):
             "target_temp": target_temp,
             "mode": mode,
             "heating_power": round(power_fraction * 100) if mode != MODE_IDLE else 0,
-            "trv_setpoint": self._compute_trv_setpoint(mode, power_fraction, current_temp, target_temp, has_external_sensor),
+            "trv_setpoint": self._compute_trv_setpoint(mode, power_fraction, current_temp, target_temp, has_external_sensor, device_max_temp),
             "window_open": window_open,
             **build_override_live(room),
             "active_schedule_index": self._get_active_schedule_index(room),
@@ -611,13 +619,17 @@ class RoomMindCoordinator(DataUpdateCoordinator):
     def _compute_trv_setpoint(
         mode: str, power_fraction: float, current_temp: float | None,
         target_temp: float | None, has_external_sensor: bool,
+        device_max_temp: float | None = None,
     ) -> float | None:
         """Compute the TRV setpoint sent to thermostats (for UI display)."""
         if mode != MODE_HEATING or not has_external_sensor or current_temp is None or target_temp is None:
             return None
         trv = round(current_temp + power_fraction * (HEATING_BOOST_TARGET - current_temp), 1)
         trv = max(target_temp, trv)
-        return min(HEATING_BOOST_TARGET, trv)
+        trv = min(HEATING_BOOST_TARGET, trv)
+        if device_max_temp is not None:
+            trv = min(trv, device_max_temp)
+        return trv
 
     def _flush_ekf_accumulator(
         self, area_id: str, current_temp: float, T_outdoor: float, room: dict,
