@@ -58,6 +58,8 @@ export class RsSettingsReset extends LitElement {
                     <ha-select
                       .value=${this._resetSelectedRoom}
                       .label=${localize("settings.reset_room_select", l)}
+                      .options=${configuredRooms.map((room) => ({ value: room.areaId, label: room.name }))}
+                      fixedMenuPosition
                       @selected=${(e: Event) => { this._resetSelectedRoom = getSelectValue(e); }}
                       @closed=${(e: Event) => e.stopPropagation()}
                     >

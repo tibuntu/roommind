@@ -127,6 +127,12 @@ export class RsSettingsMold extends LitElement {
                       style="width: 100%;"
                       .value=${this.moldPreventionIntensity}
                       .label=${localize("mold.intensity", l)}
+                      .options=${[
+                        { value: "light", label: localize("mold.intensity_light", l, { delta: String(toDisplayDelta(1, this.hass)), unit: tempUnit(this.hass) }) },
+                        { value: "medium", label: localize("mold.intensity_medium", l, { delta: String(toDisplayDelta(2, this.hass)), unit: tempUnit(this.hass) }) },
+                        { value: "strong", label: localize("mold.intensity_strong", l, { delta: String(toDisplayDelta(3, this.hass)), unit: tempUnit(this.hass) }) },
+                      ]}
+                      fixedMenuPosition
                       @selected=${(e: Event) => {
                         const v = getSelectValue(e) as "light" | "medium" | "strong";
                         if (v && v !== this.moldPreventionIntensity) this._fire("moldPreventionIntensity", v);
@@ -202,6 +208,11 @@ export class RsSettingsMold extends LitElement {
                             ></ha-entity-picker>
                             <ha-select
                               .value=${t.notify_when}
+                              .options=${[
+                                { value: "always", label: localize("mold.target_when_always", l) },
+                                { value: "home_only", label: localize("mold.target_when_home", l) },
+                              ]}
+                              fixedMenuPosition
                               @selected=${(e: Event) => {
                                 const v = getSelectValue(e) as "always" | "home_only";
                                 if (!v) return;

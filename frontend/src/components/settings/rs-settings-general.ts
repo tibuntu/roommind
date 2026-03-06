@@ -84,6 +84,10 @@ export class RsSettingsGeneral extends LitElement {
             <ha-select
               .label=${localize("schedule.off_action_label", l)}
               .value=${this.scheduleOffAction}
+              .options=${[
+                { value: "eco", label: localize("schedule.off_action_eco", l) },
+                { value: "off", label: localize("schedule.off_action_off", l) },
+              ]}
               fixedMenuPosition
               @selected=${(e: Event) => {
                 const val = getSelectValue(e) as "eco" | "off";
@@ -250,6 +254,10 @@ export class RsSettingsGeneral extends LitElement {
                     <ha-select
                       .label=${localize("presence.away_action_label", l)}
                       .value=${this.presenceAwayAction}
+                      .options=${[
+                        { value: "eco", label: localize("presence.away_action_eco", l) },
+                        { value: "off", label: localize("presence.away_action_off", l) },
+                      ]}
                       fixedMenuPosition
                       @selected=${(e: Event) => {
                         const val = getSelectValue(e) as "eco" | "off";
