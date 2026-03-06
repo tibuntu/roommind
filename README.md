@@ -1,10 +1,11 @@
 # RoomMind
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blue.svg)](https://www.home-assistant.io/)
+[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.2%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Tests](https://github.com/snazzybean/roommind/actions/workflows/ci.yml/badge.svg)](https://github.com/snazzybean/roommind/actions/workflows/ci.yml)
 ![Coverage](https://raw.githubusercontent.com/snazzybean/roommind/python-coverage-comment-action-data/badge.svg)
+[![GitHub Release](https://img.shields.io/github/v/release/snazzybean/roommind)](https://github.com/snazzybean/roommind/releases/latest)
 
 [![Open your Home Assistant instance and open RoomMind inside HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=snazzybean&repository=roommind&category=integration)
 
@@ -107,7 +108,7 @@ These can be used in HA automations, dashboards, or other integrations.
 
 ## Requirements
 
-- **Home Assistant** 2024.1.0+
+- **Home Assistant** 2026.2+
 - At least one HA area with a `climate.*` entity
 - Optional: temperature sensor, humidity sensor, window sensors, weather entity, schedule helpers, person entities
 
