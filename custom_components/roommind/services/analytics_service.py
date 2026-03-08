@@ -316,24 +316,27 @@ async def build_analytics_data(
 
                     sim_q_residual = compute_residual_heat(elapsed, system_type, sim_last_pf, sim_heat_dur)
 
-                pred_temps = cast(list[float | None], simulate_prediction(
-                    model=model,
-                    estimator=est,
-                    target_forecast=target_forecast,
-                    outdoor_series=outdoor_series,
-                    current_temp=current_t,
-                    window_open=coordinator._window_manager._paused.get(area_id, False),
-                    mpc_active=mpc_active,
-                    room_config=room_config,
-                    settings=settings,
-                    all_points=all_points,
-                    solar_series=solar_series,
-                    acs_can_heat=check_acs_can_heat(hass, room_config),
-                    q_residual=sim_q_residual,
-                    heating_system_type=system_type,
-                    heating_duration_minutes=sim_heat_dur,
-                    last_power_fraction=sim_last_pf,
-                ))
+                pred_temps = cast(
+                    list[float | None],
+                    simulate_prediction(
+                        model=model,
+                        estimator=est,
+                        target_forecast=target_forecast,
+                        outdoor_series=outdoor_series,
+                        current_temp=current_t,
+                        window_open=coordinator._window_manager._paused.get(area_id, False),
+                        mpc_active=mpc_active,
+                        room_config=room_config,
+                        settings=settings,
+                        all_points=all_points,
+                        solar_series=solar_series,
+                        acs_can_heat=check_acs_can_heat(hass, room_config),
+                        q_residual=sim_q_residual,
+                        heating_system_type=system_type,
+                        heating_duration_minutes=sim_heat_dur,
+                        last_power_fraction=sim_last_pf,
+                    ),
+                )
 
     # Merge into unified forecast points on shared 5-min grid
     forecast: list[dict] = []
