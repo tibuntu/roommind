@@ -243,6 +243,7 @@ class MPCController:
         q_residual: float = 0.0,
         heating_system_type: str = "",
         mode_on_since: float | None = None,
+        shading_factor: float = 1.0,
     ) -> None:
         self.hass = hass
         self.room_config = room_config
@@ -264,6 +265,7 @@ class MPCController:
         self.q_residual = q_residual
         self._heating_system_type = heating_system_type
         self._mode_on_since = mode_on_since
+        self._shading_factor = shading_factor
 
         s = settings or {}
         self.outdoor_cooling_min = s.get("outdoor_cooling_min", DEFAULT_OUTDOOR_COOLING_MIN)
@@ -552,11 +554,26 @@ class MPCController:
             while len(cloud_per_block) < n_blocks:
                 cloud_per_block.append(cloud_per_block[-1] if cloud_per_block else None)
 
-        return build_solar_series(
+        series = build_solar_series(
             self._latitude, self._longitude, n_blocks,
             dt_minutes=PLAN_DT_MINUTES,
             cloud_series=cloud_per_block,
         )
+        # MPC uses unshaded solar to avoid oscillation feedback loop:
+        # covers deployed → low solar prediction → retract → high solar → deploy
+        return series
+
+    @property
+    def predicted_peak_temp(self) -> float | None:
+        """Return the maximum predicted temperature over the MPC lookahead horizon.
+
+        Available after async_evaluate() has been called.
+        Returns None if no MPC plan was computed (bang-bang mode or insufficient data).
+        """
+        plan = self.last_plan
+        if plan is None or not plan.temperatures or len(plan.temperatures) < 2:
+            return None
+        return max(plan.temperatures[1:])  # Skip index 0 (current T)
 
     def _build_residual_series(self, n_blocks: int) -> list[float] | None:
         """Build decaying residual heat series for MPC horizon."""
