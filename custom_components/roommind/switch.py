@@ -1,4 +1,5 @@
 """Switch platform for RoomMind."""
+
 from __future__ import annotations
 
 from homeassistant.components.switch import SwitchEntity
@@ -12,7 +13,8 @@ from .coordinator import RoomMindCoordinator
 
 
 def _create_room_switches(
-    coordinator: RoomMindCoordinator, area_id: str,
+    coordinator: RoomMindCoordinator,
+    area_id: str,
 ) -> list[SwitchEntity]:
     """Create switch entities for a room."""
     return [RoomMindCoverAutoSwitch(coordinator, area_id)]

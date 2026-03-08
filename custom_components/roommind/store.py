@@ -10,10 +10,8 @@ from homeassistant.helpers.storage import Store
 from .const import (
     DEFAULT_COMFORT_COOL,
     DEFAULT_COMFORT_HEAT,
-    DEFAULT_COMFORT_TEMP,
     DEFAULT_ECO_COOL,
     DEFAULT_ECO_HEAT,
-    DEFAULT_ECO_TEMP,
     DOMAIN,
 )
 
@@ -57,7 +55,9 @@ class RoomMindStore:
 
     async def _async_save(self) -> None:
         """Persist current room data to the HA store."""
-        await self._store.async_save({"rooms": self._data, "settings": self._settings, "thermal_data": self._thermal_data})
+        await self._store.async_save(
+            {"rooms": self._data, "settings": self._settings, "thermal_data": self._thermal_data}
+        )
 
     def get_rooms(self) -> dict[str, dict]:
         """Return a deep copy of all rooms (with migration applied)."""

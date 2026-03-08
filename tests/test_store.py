@@ -34,9 +34,7 @@ async def test_save_room_updates_existing(store):
     await store.async_load()
 
     await store.async_save_room("wohnzimmer", {"thermostats": ["climate.wz_trv"]})
-    updated = await store.async_save_room(
-        "wohnzimmer", {"thermostats": ["climate.wz_trv", "climate.wz_trv2"]}
-    )
+    updated = await store.async_save_room("wohnzimmer", {"thermostats": ["climate.wz_trv", "climate.wz_trv2"]})
 
     assert updated["area_id"] == "wohnzimmer"
     assert updated["thermostats"] == ["climate.wz_trv", "climate.wz_trv2"]
@@ -240,9 +238,7 @@ async def test_save_settings_persists(store):
 @pytest.mark.asyncio
 async def test_settings_migration_from_old_store(store):
     """Stores without 'settings' key get an empty dict."""
-    store._store.async_load = AsyncMock(return_value={
-        "rooms": {"r1": {"area_id": "r1", "schedules": []}}
-    })
+    store._store.async_load = AsyncMock(return_value={"rooms": {"r1": {"area_id": "r1", "schedules": []}}})
     await store.async_load()
     assert store.get_settings() == {}
 
@@ -260,9 +256,7 @@ async def test_thermal_data_persistence(store):
 @pytest.mark.asyncio
 async def test_thermal_data_migration_from_old_store(store):
     """Old store without thermal_data key loads cleanly."""
-    store._store.async_load = AsyncMock(return_value={
-        "rooms": {"r1": {"area_id": "r1", "schedules": []}}
-    })
+    store._store.async_load = AsyncMock(return_value={"rooms": {"r1": {"area_id": "r1", "schedules": []}}})
     await store.async_load()
     # After fresh load, thermal data should be empty dict
     assert store.get_thermal_data() == {}

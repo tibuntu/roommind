@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import math
 
-import pytest
-
 from custom_components.roommind.control.residual_heat import (
     build_residual_series,
     compute_residual_heat,
     get_min_run_blocks,
 )
-
 
 # ---------------------------------------------------------------------------
 # compute_residual_heat
@@ -156,6 +153,7 @@ def test_min_run_blocks_zero_dt():
 def test_tau_zero_returns_zero():
     """A profile with tau=0 should return 0.0 to avoid division by zero."""
     from unittest.mock import patch
+
     from custom_components.roommind.control import residual_heat as rh
 
     fake_profiles = {"zero_tau": {"tau_minutes": 0, "initial_fraction": 0.5}}

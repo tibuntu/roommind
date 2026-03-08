@@ -1,4 +1,5 @@
 """Climate platform for RoomMind."""
+
 from __future__ import annotations
 
 import time
@@ -19,7 +20,8 @@ from .coordinator import RoomMindCoordinator
 
 
 def _create_room_climates(
-    coordinator: RoomMindCoordinator, area_id: str,
+    coordinator: RoomMindCoordinator,
+    area_id: str,
 ) -> list[ClimateEntity]:
     """Create climate entities for a room."""
     return [RoomMindOverrideClimate(coordinator, area_id)]
@@ -50,9 +52,7 @@ class RoomMindOverrideClimate(CoordinatorEntity, ClimateEntity):
     _attr_icon = "mdi:thermometer-alert"
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.AUTO]
     _attr_supported_features = (
-        ClimateEntityFeature.TARGET_TEMPERATURE
-        | ClimateEntityFeature.TURN_ON
-        | ClimateEntityFeature.TURN_OFF
+        ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.TURN_ON | ClimateEntityFeature.TURN_OFF
     )
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 0.5
@@ -109,27 +109,36 @@ class RoomMindOverrideClimate(CoordinatorEntity, ClimateEntity):
         if temperature is None:
             return
         store = self.coordinator.hass.data[DOMAIN]["store"]
-        await store.async_update_room(self._area_id, {
-            "override_temp": temperature,
-            "override_until": None,
-            "override_type": OVERRIDE_CUSTOM,
-        })
+        await store.async_update_room(
+            self._area_id,
+            {
+                "override_temp": temperature,
+                "override_until": None,
+                "override_type": OVERRIDE_CUSTOM,
+            },
+        )
         await self.coordinator.async_request_refresh()
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set HVAC mode: OFF clears override, AUTO activates."""
         store = self.coordinator.hass.data[DOMAIN]["store"]
         if hvac_mode == HVACMode.OFF:
-            await store.async_update_room(self._area_id, {
-                "override_temp": None,
-                "override_until": None,
-                "override_type": None,
-            })
+            await store.async_update_room(
+                self._area_id,
+                {
+                    "override_temp": None,
+                    "override_until": None,
+                    "override_type": None,
+                },
+            )
         elif hvac_mode == HVACMode.AUTO:
             if not self._is_override_active():
-                await store.async_update_room(self._area_id, {
-                    "override_temp": DEFAULT_COMFORT_TEMP,
-                    "override_until": None,
-                    "override_type": OVERRIDE_CUSTOM,
-                })
+                await store.async_update_room(
+                    self._area_id,
+                    {
+                        "override_temp": DEFAULT_COMFORT_TEMP,
+                        "override_until": None,
+                        "override_type": OVERRIDE_CUSTOM,
+                    },
+                )
         await self.coordinator.async_request_refresh()

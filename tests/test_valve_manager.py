@@ -17,6 +17,7 @@ def vm(hass):
 
 # --- property: cycling_eids ---
 
+
 def test_cycling_eids_empty(vm):
     assert vm.cycling_eids == set()
 
@@ -29,6 +30,7 @@ def test_cycling_eids_returns_set(vm):
 
 # --- property: actuation_dirty setter ---
 
+
 def test_actuation_dirty_setter(vm):
     assert vm.actuation_dirty is False
     vm.actuation_dirty = True
@@ -38,6 +40,7 @@ def test_actuation_dirty_setter(vm):
 
 
 # --- get_actuation_data ---
+
 
 def test_get_actuation_data_empty(vm):
     assert vm.get_actuation_data() == {}
@@ -52,6 +55,7 @@ def test_get_actuation_data_returns_copy(vm):
 
 
 # --- async_finish_cycles: exception handling ---
+
 
 @pytest.mark.asyncio
 async def test_finish_cycles_exception_on_turn_off(vm):
@@ -73,6 +77,7 @@ async def test_finish_cycles_exception_on_turn_off(vm):
 
 # --- async_check_and_cycle: exception on disable close ---
 
+
 @pytest.mark.asyncio
 async def test_check_and_cycle_exception_on_disable_close(vm):
     """Exception closing active cycle on disable is caught."""
@@ -84,13 +89,15 @@ async def test_check_and_cycle_exception_on_disable_close(vm):
         side_effect=Exception("turn off failed"),
     ):
         await vm.async_check_and_cycle(
-            rooms={}, settings={"valve_protection_enabled": False},
+            rooms={},
+            settings={"valve_protection_enabled": False},
         )
 
     assert vm._cycling == {}
 
 
 # --- async_check_and_cycle: exception starting cycle ---
+
 
 @pytest.mark.asyncio
 async def test_check_and_cycle_exception_starting_cycle(vm):

@@ -13,7 +13,8 @@ from homeassistant.components.frontend import (
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_validation as cv, issue_registry as ir
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN, PLATFORMS, VERSION
@@ -128,11 +129,7 @@ async def _async_check_version_mismatch(hass: HomeAssistant) -> None:
     """Compare in-memory VERSION (from boot) with manifest.json on disk."""
     manifest_path = Path(__file__).parent / "manifest.json"
     try:
-        disk_version: str = (
-            await hass.async_add_executor_job(
-                lambda: json.loads(manifest_path.read_text())["version"]
-            )
-        )
+        disk_version: str = await hass.async_add_executor_job(lambda: json.loads(manifest_path.read_text())["version"])
     except Exception:  # noqa: BLE001
         return
 

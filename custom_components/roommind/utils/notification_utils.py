@@ -97,7 +97,8 @@ async def async_send_mold_notification(
             if not _is_person_home(hass, person_entity):
                 _LOGGER.debug(
                     "Skipping mold notification to %s — person %s is away",
-                    entity_id, person_entity,
+                    entity_id,
+                    person_entity,
                 )
                 continue
 

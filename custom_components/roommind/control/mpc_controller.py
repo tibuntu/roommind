@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from homeassistant.core import HomeAssistant
 
@@ -22,10 +22,10 @@ from ..const import (
     MODE_IDLE,
     TargetTemps,
 )
-from .mpc_optimizer import MPCOptimizer, MPCPlan
 from ..utils.temp_utils import celsius_to_ha_temp
-from .thermal_model import RoomModelManager
+from .mpc_optimizer import MPCOptimizer, MPCPlan
 from .residual_heat import get_min_run_blocks
+from .thermal_model import RoomModelManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,14 +69,11 @@ async def async_turn_off_climate(
 
     # Fallback: device does not support "off" → set to min_temp / max_temp
     is_cooling = "cool" in hvac_modes or "heat_cool" in hvac_modes
-    fallback_temp = (
-        state.attributes.get("max_temp") if is_cooling else state.attributes.get("min_temp")
-    )
+    fallback_temp = state.attributes.get("max_temp") if is_cooling else state.attributes.get("min_temp")
 
     if fallback_temp is None:
         _LOGGER.warning(
-            "Area '%s': device '%s' has no 'off' mode and no %s attribute, "
-            "cannot turn off reliably",
+            "Area '%s': device '%s' has no 'off' mode and no %s attribute, cannot turn off reliably",
             area_id,
             entity_id,
             "max_temp" if is_cooling else "min_temp",
@@ -85,10 +82,7 @@ async def async_turn_off_climate(
 
     # Redundancy: skip if already at fallback temp
     current_temp_setting = state.attributes.get("temperature")
-    if (
-        current_temp_setting is not None
-        and round(current_temp_setting, 1) == round(fallback_temp, 1)
-    ):
+    if current_temp_setting is not None and round(current_temp_setting, 1) == round(fallback_temp, 1):
         return
 
     _LOGGER.debug(
@@ -140,7 +134,7 @@ DEFAULT_OUTDOOR_TEMP_FALLBACK = 10.0
 # Minimum sample counts before MPC is allowed.
 # Each EKF update covers ~3 min (EKF_UPDATE_MIN_DT), so these correspond
 # to real-time requirements of ~3 h idle + ~1 h active-mode data.
-MIN_IDLE_UPDATES = 60    # ~3 h of idle data at 3-min EKF intervals
+MIN_IDLE_UPDATES = 60  # ~3 h of idle data at 3-min EKF intervals
 MIN_ACTIVE_UPDATES = 20  # ~1 h of heating or cooling data
 
 
@@ -173,9 +167,7 @@ def get_can_heat_cool(
     contribute to the heating capability of the room.
     """
     climate_mode = room_config.get("climate_mode", "auto")
-    can_heat = climate_mode != CLIMATE_MODE_COOL_ONLY and (
-        bool(room_config.get("thermostats")) or acs_can_heat
-    )
+    can_heat = climate_mode != CLIMATE_MODE_COOL_ONLY and (bool(room_config.get("thermostats")) or acs_can_heat)
     can_cool = climate_mode != CLIMATE_MODE_HEAT_ONLY and bool(room_config.get("acs"))
 
     if outdoor_temp is not None:
@@ -202,9 +194,7 @@ def is_mpc_active(
     """
     model = model_manager.get_model(area_id)
     Q_check = model.Q_heat if can_heat else (-model.Q_cool if can_cool else 0.0)
-    pred_std = model_manager.get_prediction_std(
-        area_id, Q_check, current_temp, outdoor_temp, PLAN_DT_MINUTES
-    )
+    pred_std = model_manager.get_prediction_std(area_id, Q_check, current_temp, outdoor_temp, PLAN_DT_MINUTES)
     if pred_std >= MPC_MAX_PREDICTION_STD:
         return False
 
@@ -235,7 +225,7 @@ class MPCController:
         settings: dict | None = None,
         previous_mode: str = MODE_IDLE,
         has_external_sensor: bool = True,
-        target_resolver: "Callable[[float], float] | None" = None,
+        target_resolver: Callable[[float], float] | None = None,
         q_solar: float = 0.0,
         latitude: float = 0.0,
         longitude: float = 0.0,
@@ -310,7 +300,11 @@ class MPCController:
         Q_check = model.Q_heat if can_heat else (-model.Q_cool if can_cool else 0.0)
         T_out = self.outdoor_temp if self.outdoor_temp is not None else DEFAULT_OUTDOOR_TEMP_FALLBACK
         pred_std = self._model_manager.get_prediction_std(
-            self._area_id, Q_check, current_temp or 20.0, T_out, PLAN_DT_MINUTES,
+            self._area_id,
+            Q_check,
+            current_temp or 20.0,
+            T_out,
+            PLAN_DT_MINUTES,
             q_solar=self.q_solar,
             q_residual=self.q_residual,
         )
@@ -374,18 +368,11 @@ class MPCController:
         if self._target_resolver is not None:
             now = time.time()
             dt_seconds = PLAN_DT_MINUTES * 60
-            raw_targets = [
-                self._target_resolver(now + i * dt_seconds)
-                for i in range(horizon_blocks)
-            ]
+            raw_targets = [self._target_resolver(now + i * dt_seconds) for i in range(horizon_blocks)]
             # Extract separate heat and cool series from TargetTemps
             if raw_targets and isinstance(raw_targets[0], TargetTemps):
-                heat_target_series = [
-                    t.heat if t.heat is not None else current_temp for t in raw_targets
-                ]
-                cool_target_series = [
-                    t.cool if t.cool is not None else current_temp for t in raw_targets
-                ]
+                heat_target_series = [t.heat if t.heat is not None else current_temp for t in raw_targets]
+                cool_target_series = [t.cool if t.cool is not None else current_temp for t in raw_targets]
             else:
                 # Legacy resolver returning float|None
                 heat_target_series = [t if t is not None else current_temp for t in raw_targets]
@@ -397,6 +384,7 @@ class MPCController:
             cool_target_series = [fallback_c] * horizon_blocks
 
         from .residual_heat import get_min_run_blocks
+
         min_run = get_min_run_blocks(self._heating_system_type, PLAN_DT_MINUTES)
 
         optimizer = MPCOptimizer(
@@ -533,7 +521,9 @@ class MPCController:
     def _build_outdoor_series(self, n_blocks: int) -> list[float]:
         """Build outdoor temperature series from forecast or current value."""
         if self.outdoor_forecast:
-            series = [f.get("temperature", self.outdoor_temp or DEFAULT_OUTDOOR_TEMP_FALLBACK) for f in self.outdoor_forecast]
+            series = [
+                f.get("temperature", self.outdoor_temp or DEFAULT_OUTDOOR_TEMP_FALLBACK) for f in self.outdoor_forecast
+            ]
             while len(series) < n_blocks:
                 series.append(series[-1] if series else (self.outdoor_temp or DEFAULT_OUTDOOR_TEMP_FALLBACK))
             return series[:n_blocks]
@@ -555,7 +545,9 @@ class MPCController:
                 cloud_per_block.append(cloud_per_block[-1] if cloud_per_block else None)
 
         series = build_solar_series(
-            self._latitude, self._longitude, n_blocks,
+            self._latitude,
+            self._longitude,
+            n_blocks,
             dt_minutes=PLAN_DT_MINUTES,
             cloud_series=cloud_per_block,
         )
@@ -580,6 +572,7 @@ class MPCController:
         if self.q_residual <= 0 or not self._heating_system_type:
             return None
         from ..const import HEATING_SYSTEM_PROFILES, RESIDUAL_HEAT_CUTOFF
+
         profile = HEATING_SYSTEM_PROFILES.get(self._heating_system_type)
         if not profile:
             return None
@@ -727,13 +720,18 @@ class MPCController:
             if resolved is None:
                 _LOGGER.debug(
                     "Area '%s': device '%s' does not support '%s' or any fallback, skipping",
-                    self._area_id, eid, data["hvac_mode"],
+                    self._area_id,
+                    eid,
+                    data["hvac_mode"],
                 )
                 return
             if resolved != data["hvac_mode"]:
                 _LOGGER.debug(
                     "Area '%s': device '%s' resolved '%s' -> '%s'",
-                    self._area_id, eid, data["hvac_mode"], resolved,
+                    self._area_id,
+                    eid,
+                    data["hvac_mode"],
+                    resolved,
                 )
                 data = {**data, "hvac_mode": resolved}
 
@@ -764,6 +762,8 @@ class MPCController:
         except Exception:  # noqa: BLE001
             _LOGGER.warning(
                 "Area '%s': climate.%s failed on '%s'",
-                self._area_id, service, data.get("entity_id"),
+                self._area_id,
+                service,
+                data.get("entity_id"),
                 exc_info=True,
             )

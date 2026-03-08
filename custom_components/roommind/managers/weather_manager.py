@@ -46,8 +46,7 @@ class WeatherManager:
                 return result
         except Exception:  # noqa: BLE001
             _LOGGER.debug(
-                "weather.get_forecasts service call failed for %s, "
-                "falling back to state attributes",
+                "weather.get_forecasts service call failed for %s, falling back to state attributes",
                 weather_entity,
             )
 

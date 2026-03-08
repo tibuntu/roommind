@@ -1,8 +1,10 @@
 """Tests for RoomMind binary sensor platform."""
+
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 from custom_components.roommind.binary_sensor import (
     RoomMindCoverPausedSensor,

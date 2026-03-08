@@ -30,9 +30,7 @@ def _build_model_info(estimator) -> dict:
     }
 
 
-async def async_get_config_entry_diagnostics(
-    hass: HomeAssistant, config_entry: ConfigEntry
-) -> dict[str, Any]:
+async def async_get_config_entry_diagnostics(hass: HomeAssistant, config_entry: ConfigEntry) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
     data = hass.data.get(DOMAIN, {})
     store = data.get("store")
@@ -86,9 +84,7 @@ async def async_get_config_entry_diagnostics(
     if coordinator and coordinator._history_store:
         for area_id in rooms_config:
             try:
-                rows = await hass.async_add_executor_job(
-                    coordinator._history_store.read_detail, area_id, 7200
-                )
+                rows = await hass.async_add_executor_job(coordinator._history_store.read_detail, area_id, 7200)
                 recent_history[area_id] = [
                     {
                         "ts": row.get("timestamp", ""),

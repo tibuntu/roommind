@@ -5,16 +5,15 @@ from __future__ import annotations
 import time
 
 from custom_components.roommind.control.analytics_simulator import (
+    _simulate_bangbang,
+    _simulate_mpc,
+    _simulate_window_open,
     build_forecast_outdoor_series,
     build_forecast_solar_series,
     compute_observed_idle_rate,
     simulate_prediction,
-    _simulate_bangbang,
-    _simulate_mpc,
-    _simulate_window_open,
 )
 from custom_components.roommind.control.thermal_model import RCModel, ThermalEKF
-
 
 # ---------------------------------------------------------------------------
 # compute_observed_idle_rate
@@ -213,8 +212,12 @@ class TestSimulateMPC:
         }
         settings = {"comfort_weight": 70}
         result = _simulate_mpc(
-            model, target_forecast, outdoor_series,
-            current_temp=18.0, room_config=room_config, settings=settings,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=18.0,
+            room_config=room_config,
+            settings=settings,
         )
         assert len(result) == 10
         assert all(isinstance(t, float) for t in result)
@@ -231,8 +234,12 @@ class TestSimulateMPC:
         }
         settings = {"comfort_weight": 70}
         result = _simulate_mpc(
-            model, target_forecast, outdoor_series,
-            current_temp=15.0, room_config=room_config, settings=settings,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=15.0,
+            room_config=room_config,
+            settings=settings,
         )
         # Temperature should increase when starting cold
         assert result[-1] > 15.0
@@ -250,8 +257,12 @@ class TestSimulateMPC:
         }
         settings = {"comfort_weight": 70}
         result = _simulate_mpc(
-            model, target_forecast, outdoor_series,
-            current_temp=20.0, room_config=room_config, settings=settings,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
+            settings=settings,
             solar_series=solar_series,
         )
         assert len(result) == 5
@@ -268,8 +279,12 @@ class TestSimulateMPC:
         }
         settings = {}
         result = _simulate_mpc(
-            model, target_forecast, outdoor_series,
-            current_temp=20.0, room_config=room_config, settings=settings,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
+            settings=settings,
         )
         assert all(5.0 <= t <= 40.0 for t in result)
 
@@ -285,8 +300,12 @@ class TestSimulateMPC:
         }
         settings = {}
         result = _simulate_mpc(
-            model, target_forecast, outdoor_series,
-            current_temp=20.0, room_config=room_config, settings=settings,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
+            settings=settings,
         )
         # Without devices, temp should drift downward toward outdoor
         assert result[-1] < 20.0
@@ -312,8 +331,11 @@ class TestSimulateBangbang:
         }
         all_points: list[dict] = []
         result = _simulate_bangbang(
-            model, target_forecast, outdoor_series,
-            current_temp=15.0, room_config=room_config,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=15.0,
+            room_config=room_config,
             all_points=all_points,
         )
         assert len(result) == 20
@@ -333,8 +355,11 @@ class TestSimulateBangbang:
         all_points: list[dict] = []
         # Start well below target to trigger heating
         result = _simulate_bangbang(
-            model, target_forecast, outdoor_series,
-            current_temp=20.0, room_config=room_config,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
             all_points=all_points,
         )
         # With very high Q_heat, temp jumps quickly, but min run enforces at least 2 blocks
@@ -352,8 +377,11 @@ class TestSimulateBangbang:
         }
         all_points: list[dict] = []
         result = _simulate_bangbang(
-            model, target_forecast, outdoor_series,
-            current_temp=28.0, room_config=room_config,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=28.0,
+            room_config=room_config,
             all_points=all_points,
         )
         # Should cool down from 28°C
@@ -377,14 +405,20 @@ class TestSimulateBangbang:
         ]
         # The model has high U → would predict fast drift, but idle rate caps it
         result_capped = _simulate_bangbang(
-            model, target_forecast, outdoor_series,
-            current_temp=20.0, room_config=room_config,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
             all_points=all_points,
         )
         # Without cap (empty points → no cap)
         result_uncapped = _simulate_bangbang(
-            model, target_forecast, outdoor_series,
-            current_temp=20.0, room_config=room_config,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
             all_points=[],
         )
         # Capped should drift less aggressively than uncapped
@@ -401,8 +435,11 @@ class TestSimulateBangbang:
             "climate_mode": "auto",
         }
         result = _simulate_bangbang(
-            model, target_forecast, outdoor_series,
-            current_temp=20.0, room_config=room_config,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
             all_points=[],
         )
         assert all(5.0 <= t <= 40.0 for t in result)
@@ -419,14 +456,20 @@ class TestSimulateBangbang:
             "climate_mode": "auto",
         }
         result_with_solar = _simulate_bangbang(
-            model, target_forecast, outdoor_series,
-            current_temp=20.0, room_config=room_config,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
             all_points=[],
             solar_series=solar_series,
         )
         result_no_solar = _simulate_bangbang(
-            model, target_forecast, outdoor_series,
-            current_temp=20.0, room_config=room_config,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
             all_points=[],
         )
         # Solar gain should raise temperatures compared to no solar
@@ -444,8 +487,11 @@ class TestSimulateBangbang:
             "climate_mode": "auto",
         }
         result = _simulate_bangbang(
-            model, target_forecast, outdoor_series,
-            current_temp=20.9, room_config=room_config,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.9,
+            room_config=room_config,
             all_points=[],
         )
         # Within hysteresis, should stay approximately the same (idle)
@@ -465,8 +511,11 @@ class TestSimulateBangbang:
             "climate_mode": "auto",
         }
         result = _simulate_bangbang(
-            model, target_forecast, outdoor_series,
-            current_temp=15.0, room_config=room_config,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=15.0,
+            room_config=room_config,
             all_points=[],
         )
         assert len(result) == 5
@@ -490,13 +539,19 @@ class TestSimulateBangbang:
             {"ts": now - 0, "room_temp": 20.1, "mode": "idle"},
         ]
         result_capped = _simulate_bangbang(
-            model, target_forecast, outdoor_series,
-            current_temp=20.0, room_config=room_config,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
             all_points=all_points,
         )
         result_uncapped = _simulate_bangbang(
-            model, target_forecast, outdoor_series,
-            current_temp=20.0, room_config=room_config,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
             all_points=[],
         )
         # Capped should rise less aggressively than uncapped
@@ -514,8 +569,11 @@ class TestSimulateBangbang:
         }
         # With residual heat from underfloor heating
         result_with_residual = _simulate_bangbang(
-            model, target_forecast, outdoor_series,
-            current_temp=20.0, room_config=room_config,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
             all_points=[],
             q_residual=0.5,
             heating_system_type="underfloor",
@@ -523,8 +581,11 @@ class TestSimulateBangbang:
             last_power_fraction=1.0,
         )
         result_no_residual = _simulate_bangbang(
-            model, target_forecast, outdoor_series,
-            current_temp=20.0, room_config=room_config,
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
             all_points=[],
         )
         assert len(result_with_residual) == 10
@@ -546,9 +607,16 @@ class TestSimulatePrediction:
         target_forecast = [{"target_temp": 21.0}] * 5
         outdoor_series = [5.0] * 5
         result = simulate_prediction(
-            model=model, estimator=est, target_forecast=target_forecast,
-            outdoor_series=outdoor_series, current_temp=20.0, window_open=True,
-            mpc_active=False, room_config={}, settings={}, all_points=[],
+            model=model,
+            estimator=est,
+            target_forecast=target_forecast,
+            outdoor_series=outdoor_series,
+            current_temp=20.0,
+            window_open=True,
+            mpc_active=False,
+            room_config={},
+            settings={},
+            all_points=[],
         )
         assert len(result) == 5
 
@@ -564,9 +632,16 @@ class TestSimulatePrediction:
             "climate_mode": "auto",
         }
         result = simulate_prediction(
-            model=model, estimator=est, target_forecast=target_forecast,
-            outdoor_series=outdoor_series, current_temp=18.0, window_open=False,
-            mpc_active=True, room_config=room_config, settings={}, all_points=[],
+            model=model,
+            estimator=est,
+            target_forecast=target_forecast,
+            outdoor_series=outdoor_series,
+            current_temp=18.0,
+            window_open=False,
+            mpc_active=True,
+            room_config=room_config,
+            settings={},
+            all_points=[],
         )
         assert len(result) == 5
 
@@ -582,9 +657,16 @@ class TestSimulatePrediction:
             "climate_mode": "auto",
         }
         result = simulate_prediction(
-            model=model, estimator=est, target_forecast=target_forecast,
-            outdoor_series=outdoor_series, current_temp=18.0, window_open=False,
-            mpc_active=False, room_config=room_config, settings={}, all_points=[],
+            model=model,
+            estimator=est,
+            target_forecast=target_forecast,
+            outdoor_series=outdoor_series,
+            current_temp=18.0,
+            window_open=False,
+            mpc_active=False,
+            room_config=room_config,
+            settings={},
+            all_points=[],
         )
         assert len(result) == 5
 
@@ -641,8 +723,12 @@ class TestSimulateMPCEdgeCases:
             "climate_mode": "auto",
         }
         result = _simulate_mpc(
-            model, target_forecast, outdoor_series,
-            current_temp=15.0, room_config=room_config, settings={},
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=15.0,
+            room_config=room_config,
+            settings={},
         )
         assert len(result) == 5
         # Should drift toward outdoor (all idle)
@@ -661,8 +747,12 @@ class TestSimulateMPCEdgeCases:
         }
         # With underfloor min_run, heating continues even if temp exceeds target
         result = _simulate_mpc(
-            model, target_forecast, outdoor_series,
-            current_temp=15.0, room_config=room_config, settings={},
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=15.0,
+            room_config=room_config,
+            settings={},
             heating_system_type="underfloor",
         )
         assert len(result) == 10
@@ -678,8 +768,12 @@ class TestSimulateMPCEdgeCases:
             "climate_mode": "auto",
         }
         result = _simulate_mpc(
-            model, target_forecast, outdoor_series,
-            current_temp=28.0, room_config=room_config, settings={},
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=28.0,
+            room_config=room_config,
+            settings={},
         )
         assert len(result) == 20
         # Should cool down from 28
@@ -696,8 +790,12 @@ class TestSimulateMPCEdgeCases:
             "climate_mode": "auto",
         }
         result = _simulate_mpc(
-            model, target_forecast, outdoor_series,
-            current_temp=20.0, room_config=room_config, settings={},
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
+            settings={},
             q_residual=0.5,
             heating_system_type="underfloor",
             heating_duration_minutes=60.0,
@@ -717,8 +815,12 @@ class TestSimulateMPCEdgeCases:
         }
         # Start at target to force optimizer path (not stickiness)
         result = _simulate_mpc(
-            model, target_forecast, outdoor_series,
-            current_temp=21.0, room_config=room_config, settings={},
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=21.0,
+            room_config=room_config,
+            settings={},
             q_residual=0.3,
             heating_system_type="radiator",
             heating_duration_minutes=30.0,

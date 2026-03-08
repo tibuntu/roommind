@@ -22,7 +22,10 @@ def _is_fahrenheit(hass: HomeAssistant, entity_id: str | None = None) -> bool:
 
 
 def ha_temp_to_celsius(
-    hass: HomeAssistant, value: float, *, entity_id: str | None = None,
+    hass: HomeAssistant,
+    value: float,
+    *,
+    entity_id: str | None = None,
 ) -> float:
     """Convert temperature from HA unit system to Celsius.
 

@@ -13,9 +13,7 @@ from .const import DOMAIN
 from .coordinator import RoomMindCoordinator
 
 
-def _create_room_entities(
-    coordinator: RoomMindCoordinator, area_id: str
-) -> list[SensorEntity]:
+def _create_room_entities(coordinator: RoomMindCoordinator, area_id: str) -> list[SensorEntity]:
     """Create the standard set of sensor entities for a room."""
     return [
         RoomMindTargetTemperatureSensor(coordinator, area_id),

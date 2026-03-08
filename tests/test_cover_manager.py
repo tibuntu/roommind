@@ -1,19 +1,25 @@
 """Tests for CoverManager — constants, shading factor, deployment logic, and user override."""
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from custom_components.roommind.const import (
-    COVER_SOLAR_MIN, COVER_HYSTERESIS, COVER_MIN_HOLD_SECONDS,
-    COVER_POS_SCALE, COVER_MAX_EFFECTIVENESS,
-    COVER_USER_CONFLICT_THRESHOLD, COVER_USER_OVERRIDE_MINUTES,
+    COVER_HYSTERESIS,
+    COVER_MAX_EFFECTIVENESS,
+    COVER_MIN_HOLD_SECONDS,
+    COVER_POS_SCALE,
+    COVER_SOLAR_MIN,
+    COVER_USER_CONFLICT_THRESHOLD,
+    COVER_USER_OVERRIDE_MINUTES,
 )
 from custom_components.roommind.managers.cover_manager import (
-    CoverManager, CoverDecision, compute_shading_factor,
+    CoverManager,
+    compute_shading_factor,
 )
 
-
 # ── Constants ──────────────────────────────────────────────────────────
+
 
 def test_cover_constants_exist():
     assert COVER_SOLAR_MIN == 0.15
@@ -27,10 +33,12 @@ def test_cover_constants_exist():
 
 # ── Store defaults ─────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_room_config_has_cover_defaults():
     """Store must include cover defaults when creating a new room."""
     from unittest.mock import AsyncMock, MagicMock
+
     from custom_components.roommind.store import RoomMindStore
 
     store = RoomMindStore.__new__(RoomMindStore)
@@ -56,6 +64,7 @@ async def test_room_config_has_cover_defaults():
 
 
 # ── Shading factor ─────────────────────────────────────────────────────
+
 
 def test_shading_factor_fully_open():
     assert compute_shading_factor([100]) == 1.0
@@ -118,8 +127,7 @@ def test_no_deploy_in_hysteresis_band():
 def test_no_deploy_low_solar():
     mgr = CoverManager()
     kwargs = {k: v for k, v in _BASE_KWARGS.items() if k not in ("q_solar", "outdoor_temp")}
-    d = mgr.evaluate("lr", predicted_peak_temp=26.0, target_temp=22.0,
-                      q_solar=0.05, outdoor_temp=20.0, **kwargs)
+    d = mgr.evaluate("lr", predicted_peak_temp=26.0, target_temp=22.0, q_solar=0.05, outdoor_temp=20.0, **kwargs)
     assert d.changed is False
     assert "solar" in d.reason
 
@@ -127,8 +135,7 @@ def test_no_deploy_low_solar():
 def test_no_deploy_cold_outdoor():
     mgr = CoverManager()
     kwargs = {k: v for k, v in _BASE_KWARGS.items() if k != "outdoor_temp"}
-    d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0,
-                      outdoor_temp=5.0, **kwargs)
+    d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0, outdoor_temp=5.0, **kwargs)
     assert d.changed is False
     assert "cold" in d.reason
 
@@ -137,8 +144,7 @@ def test_cold_weather_retracts_if_closed():
     mgr = CoverManager()
     mgr._get_state("lr").current_position = 40
     kwargs = {k: v for k, v in _BASE_KWARGS.items() if k != "outdoor_temp"}
-    d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0,
-                      outdoor_temp=5.0, **kwargs)
+    d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0, outdoor_temp=5.0, **kwargs)
     assert d.changed is True
     assert d.target_position == 100
 
@@ -155,15 +161,13 @@ def test_cold_weather_retract_respects_hold_time():
         # 30s later: cold weather → retract should be BLOCKED by hold time
         mock_t.time.return_value = 10030.0
         kwargs = {k: v for k, v in _BASE_KWARGS.items() if k != "outdoor_temp"}
-        d2 = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0,
-                          outdoor_temp=5.0, **kwargs)
+        d2 = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0, outdoor_temp=5.0, **kwargs)
         assert d2.changed is False
         assert "hold_time" in d2.reason
 
         # After hold time expires: retract succeeds
         mock_t.time.return_value = 10000.0 + COVER_MIN_HOLD_SECONDS + 1
-        d3 = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0,
-                          outdoor_temp=5.0, **kwargs)
+        d3 = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0, outdoor_temp=5.0, **kwargs)
         assert d3.changed is True
         assert d3.target_position == 100
 
@@ -189,8 +193,7 @@ def test_position_changes_after_hold_time():
 
         mock_t.time.return_value = 10000.0 + COVER_MIN_HOLD_SECONDS + 1
         kwargs = {k: v for k, v in _BASE_KWARGS.items() if k not in ("q_solar", "outdoor_temp")}
-        d = mgr.evaluate("lr", predicted_peak_temp=22.3, target_temp=22.0,
-                          q_solar=0.05, outdoor_temp=20.0, **kwargs)
+        d = mgr.evaluate("lr", predicted_peak_temp=22.3, target_temp=22.0, q_solar=0.05, outdoor_temp=20.0, **kwargs)
         assert d.changed is True
         assert d.target_position == 100
 
@@ -240,6 +243,7 @@ def test_no_prediction_blocks_deployment():
 
 
 # ── User override detection ────────────────────────────────────────────
+
 
 def test_user_override_detected_when_cover_opened_manually():
     mgr = CoverManager()
@@ -335,8 +339,7 @@ def test_low_solar_retract_respects_hold_time():
         # 30s later: clouds appear → low solar → retract blocked by hold time
         mock_t.time.return_value = 10030.0
         kwargs = {k: v for k, v in _BASE_KWARGS.items() if k not in ("q_solar", "outdoor_temp")}
-        d2 = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0,
-                          q_solar=0.05, outdoor_temp=20.0, **kwargs)
+        d2 = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0, q_solar=0.05, outdoor_temp=20.0, **kwargs)
         assert d2.changed is False
         assert "hold_time" in d2.reason
 
@@ -358,10 +361,12 @@ def test_remove_room_nonexistent_is_noop():
 
 # ── async_apply tests ─────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_async_apply_with_position_support():
     """Covers with SET_POSITION support get set_cover_position called."""
     from unittest.mock import AsyncMock, MagicMock
+
     hass = MagicMock()
     hass.services.async_call = AsyncMock()
 
@@ -372,7 +377,8 @@ async def test_async_apply_with_position_support():
     await CoverManager.async_apply(hass, ["cover.blind1"], 60)
 
     hass.services.async_call.assert_called_once_with(
-        "cover", "set_cover_position",
+        "cover",
+        "set_cover_position",
         {"entity_id": ["cover.blind1"], "position": 60},
         blocking=False,
     )
@@ -382,6 +388,7 @@ async def test_async_apply_with_position_support():
 async def test_async_apply_binary_only_open():
     """Binary covers without position support get open_cover when target >= 100."""
     from unittest.mock import AsyncMock, MagicMock
+
     hass = MagicMock()
     hass.services.async_call = AsyncMock()
 
@@ -392,7 +399,8 @@ async def test_async_apply_binary_only_open():
     await CoverManager.async_apply(hass, ["cover.simple"], 100)
 
     hass.services.async_call.assert_called_once_with(
-        "cover", "open_cover",
+        "cover",
+        "open_cover",
         {"entity_id": ["cover.simple"]},
         blocking=False,
     )
@@ -402,6 +410,7 @@ async def test_async_apply_binary_only_open():
 async def test_async_apply_binary_only_close():
     """Binary covers without position support get close_cover when target < 100."""
     from unittest.mock import AsyncMock, MagicMock
+
     hass = MagicMock()
     hass.services.async_call = AsyncMock()
 
@@ -412,7 +421,8 @@ async def test_async_apply_binary_only_close():
     await CoverManager.async_apply(hass, ["cover.simple"], 40)
 
     hass.services.async_call.assert_called_once_with(
-        "cover", "close_cover",
+        "cover",
+        "close_cover",
         {"entity_id": ["cover.simple"]},
         blocking=False,
     )
@@ -422,6 +432,7 @@ async def test_async_apply_binary_only_close():
 async def test_async_apply_mixed_covers():
     """Mix of position-capable and binary-only covers."""
     from unittest.mock import AsyncMock, MagicMock
+
     hass = MagicMock()
     hass.services.async_call = AsyncMock()
 
@@ -444,19 +455,19 @@ async def test_async_apply_mixed_covers():
     calls = hass.services.async_call.call_args_list
     assert len(calls) == 2
     # Position cover gets set_cover_position
-    assert calls[0] == (("cover", "set_cover_position",
-                         {"entity_id": ["cover.smart"], "position": 50}),
-                        {"blocking": False})
+    assert calls[0] == (
+        ("cover", "set_cover_position", {"entity_id": ["cover.smart"], "position": 50}),
+        {"blocking": False},
+    )
     # Binary cover gets close_cover (target < 100)
-    assert calls[1] == (("cover", "close_cover",
-                         {"entity_id": ["cover.dumb"]}),
-                        {"blocking": False})
+    assert calls[1] == (("cover", "close_cover", {"entity_id": ["cover.dumb"]}), {"blocking": False})
 
 
 @pytest.mark.asyncio
 async def test_async_apply_skips_unavailable_entities():
     """Unavailable cover entities should be silently skipped."""
     from unittest.mock import AsyncMock, MagicMock
+
     hass = MagicMock()
     hass.services.async_call = AsyncMock()
     hass.states.get = MagicMock(return_value=None)
@@ -470,6 +481,7 @@ async def test_async_apply_skips_unavailable_entities():
 async def test_async_apply_supported_features_none():
     """Cover entity with supported_features=None should use binary fallback."""
     from unittest.mock import AsyncMock, MagicMock
+
     hass = MagicMock()
     hass.services.async_call = AsyncMock()
 
@@ -481,13 +493,15 @@ async def test_async_apply_supported_features_none():
 
     # supported_features=None → 0 & 4 = 0 → binary
     hass.services.async_call.assert_called_once_with(
-        "cover", "close_cover",
+        "cover",
+        "close_cover",
         {"entity_id": ["cover.weird"]},
         blocking=False,
     )
 
 
 # ── MPC-Cover feedback convergence ────────────────────────────────────
+
 
 def test_oscillating_conditions_converge():
     """Cover should converge within bounded oscillations, not wild-cycle."""
@@ -502,11 +516,10 @@ def test_oscillating_conditions_converge():
 
             # Simulate oscillating predicted peak temp: 24.0 ± 0.3°C
             import math
+
             predicted = 24.0 + 0.3 * math.sin(i * 0.5)
 
-            d = mgr.evaluate("lr",
-                predicted_peak_temp=predicted, target_temp=22.0,
-                **_BASE_KWARGS)
+            d = mgr.evaluate("lr", predicted_peak_temp=predicted, target_temp=22.0, **_BASE_KWARGS)
 
             if d.changed:
                 changes += 1
@@ -520,8 +533,12 @@ def test_oscillating_conditions_converge():
 def test_forced_position_closes_covers():
     """Forced position applies immediately — full range, no step limit."""
     mgr = CoverManager()
-    d = mgr.evaluate("lr", predicted_peak_temp=22.0, target_temp=22.0,
-                      **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "night_close"})
+    d = mgr.evaluate(
+        "lr",
+        predicted_peak_temp=22.0,
+        target_temp=22.0,
+        **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "night_close"},
+    )
     assert d.changed is True
     assert d.target_position == 0  # immediate, no step capping
     assert "forced" in d.reason
@@ -531,8 +548,12 @@ def test_forced_position_closes_covers():
 def test_forced_position_already_at_target():
     mgr = CoverManager()
     mgr._get_state("lr").current_position = 0
-    d = mgr.evaluate("lr", predicted_peak_temp=22.0, target_temp=22.0,
-                      **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "night_close"})
+    d = mgr.evaluate(
+        "lr",
+        predicted_peak_temp=22.0,
+        target_temp=22.0,
+        **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "night_close"},
+    )
     assert d.changed is False
     assert "forced_at_target" in d.reason
 
@@ -542,13 +563,21 @@ def test_forced_position_not_rate_limited(mock_t):
     """Forced positions bypass rate limiting — apply immediately."""
     mock_t.time.return_value = 1000.0
     mgr = CoverManager()
-    d1 = mgr.evaluate("lr", predicted_peak_temp=22.0, target_temp=22.0,
-                       **{**_BASE_KWARGS, "forced_position": 50, "forced_reason": "schedule"})
+    d1 = mgr.evaluate(
+        "lr",
+        predicted_peak_temp=22.0,
+        target_temp=22.0,
+        **{**_BASE_KWARGS, "forced_position": 50, "forced_reason": "schedule"},
+    )
     assert d1.changed is True
     assert d1.target_position == 50
     # Immediately change again — no hold time
-    d2 = mgr.evaluate("lr", predicted_peak_temp=22.0, target_temp=22.0,
-                       **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "night"})
+    d2 = mgr.evaluate(
+        "lr",
+        predicted_peak_temp=22.0,
+        target_temp=22.0,
+        **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "night"},
+    )
     assert d2.changed is True
     assert d2.target_position == 0
 
@@ -558,12 +587,20 @@ def test_forced_to_normal_transition_immediate(mock_t):
     """After forced ends, RoomMind takes over immediately (no hold time)."""
     mock_t.time.return_value = 1000.0
     mgr = CoverManager()
-    mgr.evaluate("lr", predicted_peak_temp=22.0, target_temp=22.0,
-                 **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "night"})
+    mgr.evaluate(
+        "lr",
+        predicted_peak_temp=22.0,
+        target_temp=22.0,
+        **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "night"},
+    )
     # Next cycle: schedule inactive, thermal logic takes over immediately
     mock_t.time.return_value = 1030.0
-    d = mgr.evaluate("lr", predicted_peak_temp=22.0, target_temp=22.0,
-                     **{**_BASE_KWARGS, "forced_position": None, "forced_reason": ""})
+    d = mgr.evaluate(
+        "lr",
+        predicted_peak_temp=22.0,
+        target_temp=22.0,
+        **{**_BASE_KWARGS, "forced_position": None, "forced_reason": ""},
+    )
     # excess=0 < retract_threshold → retract to 100, no hold time after forced
     assert d.changed is True
     assert d.target_position == 100
@@ -579,8 +616,7 @@ def test_normal_thermal_still_rate_limited(mock_t):
     # 30s later: thermal wants to change, but hold time blocks it
     mock_t.time.return_value = 1030.0
     kwargs = {k: v for k, v in _BASE_KWARGS.items() if k not in ("q_solar", "outdoor_temp")}
-    d = mgr.evaluate("lr", predicted_peak_temp=22.0, target_temp=22.0,
-                     q_solar=0.05, outdoor_temp=20.0, **kwargs)
+    d = mgr.evaluate("lr", predicted_peak_temp=22.0, target_temp=22.0, q_solar=0.05, outdoor_temp=20.0, **kwargs)
     assert d.changed is False
     assert "hold_time" in d.reason
 
@@ -588,17 +624,24 @@ def test_normal_thermal_still_rate_limited(mock_t):
 def test_forced_position_works_without_prediction():
     """Forced position works even when predicted_peak_temp is None."""
     mgr = CoverManager()
-    d = mgr.evaluate("lr", predicted_peak_temp=None, target_temp=22.0,
-                      **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "night_close"})
+    d = mgr.evaluate(
+        "lr",
+        predicted_peak_temp=None,
+        target_temp=22.0,
+        **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "night_close"},
+    )
     assert d.changed is True
     assert "forced" in d.reason
 
 
 def test_manual_override_blocks_forced_position():
     mgr = CoverManager()
-    d = mgr.evaluate("lr", predicted_peak_temp=22.0, target_temp=22.0,
-                      **{**_BASE_KWARGS, "has_active_override": True,
-                         "forced_position": 0, "forced_reason": "night_close"})
+    d = mgr.evaluate(
+        "lr",
+        predicted_peak_temp=22.0,
+        target_temp=22.0,
+        **{**_BASE_KWARGS, "has_active_override": True, "forced_position": 0, "forced_reason": "night_close"},
+    )
     assert d.changed is False
     assert "manual_override" in d.reason
 
@@ -611,6 +654,7 @@ def test_no_forced_position_uses_thermal():
 
 
 # ── Edge case tests ───────────────────────────────────────────────────
+
 
 def test_empty_cover_entity_ids_disabled():
     """Auto enabled but empty cover list should return disabled."""
@@ -626,8 +670,7 @@ def test_outdoor_gate_disabled_when_none():
     mgr = CoverManager()
     kwargs = {k: v for k, v in _BASE_KWARGS.items() if k != "outdoor_temp"}
     kwargs["covers_outdoor_min_temp"] = None
-    d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0,
-                      outdoor_temp=2.0, **kwargs)
+    d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0, outdoor_temp=2.0, **kwargs)
     # Cold outdoor (2°C) but gate disabled → thermal logic runs, deploys
     assert d.changed is True
     assert "deploy" in d.reason
@@ -637,8 +680,7 @@ def test_outdoor_temp_none_skips_cold_gate():
     """outdoor_temp=None with gate configured should skip cold weather gate."""
     mgr = CoverManager()
     kwargs = {k: v for k, v in _BASE_KWARGS.items() if k != "outdoor_temp"}
-    d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0,
-                      outdoor_temp=None, **kwargs)
+    d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0, outdoor_temp=None, **kwargs)
     assert d.changed is True
     assert "deploy" in d.reason
 
@@ -648,8 +690,9 @@ def test_solar_boundary_at_exact_min():
     mgr = CoverManager()
     mgr._get_state("lr").current_position = 50
     kwargs = {k: v for k, v in _BASE_KWARGS.items() if k not in ("q_solar", "outdoor_temp")}
-    d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0,
-                      q_solar=COVER_SOLAR_MIN, outdoor_temp=20.0, **kwargs)
+    d = mgr.evaluate(
+        "lr", predicted_peak_temp=25.0, target_temp=22.0, q_solar=COVER_SOLAR_MIN, outdoor_temp=20.0, **kwargs
+    )
     # q_solar == 0.15, check < 0.15 is False → solar gate does NOT trigger
     assert "low_solar" not in d.reason
 
@@ -659,8 +702,7 @@ def test_solar_just_below_min_retracts():
     mgr = CoverManager()
     mgr._get_state("lr").current_position = 50
     kwargs = {k: v for k, v in _BASE_KWARGS.items() if k not in ("q_solar", "outdoor_temp")}
-    d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0,
-                      q_solar=0.14, outdoor_temp=20.0, **kwargs)
+    d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0, q_solar=0.14, outdoor_temp=20.0, **kwargs)
     assert d.changed is True
     assert d.target_position == 100
     assert "low_solar" in d.reason
@@ -682,13 +724,16 @@ def test_forced_to_cold_weather_retract_immediate(mock_t):
     mock_t.time.return_value = 1000.0
     mgr = CoverManager()
     # Night close forces covers shut
-    mgr.evaluate("lr", predicted_peak_temp=22.0, target_temp=22.0,
-                 **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "night"})
+    mgr.evaluate(
+        "lr",
+        predicted_peak_temp=22.0,
+        target_temp=22.0,
+        **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "night"},
+    )
     # Next cycle: schedule inactive, cold weather → retract immediately
     mock_t.time.return_value = 1030.0
     kwargs = {k: v for k, v in _BASE_KWARGS.items() if k != "outdoor_temp"}
-    d = mgr.evaluate("lr", predicted_peak_temp=22.0, target_temp=22.0,
-                      outdoor_temp=2.0, **kwargs)
+    d = mgr.evaluate("lr", predicted_peak_temp=22.0, target_temp=22.0, outdoor_temp=2.0, **kwargs)
     assert d.changed is True
     assert d.target_position == 100
     assert "cold_weather" in d.reason
@@ -699,13 +744,16 @@ def test_forced_to_low_solar_retract_immediate(mock_t):
     """After forced position ends, low solar retract skips hold time."""
     mock_t.time.return_value = 1000.0
     mgr = CoverManager()
-    mgr.evaluate("lr", predicted_peak_temp=22.0, target_temp=22.0,
-                 **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "schedule"})
+    mgr.evaluate(
+        "lr",
+        predicted_peak_temp=22.0,
+        target_temp=22.0,
+        **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "schedule"},
+    )
     # Next cycle: schedule inactive, low solar → retract immediately
     mock_t.time.return_value = 1030.0
     kwargs = {k: v for k, v in _BASE_KWARGS.items() if k not in ("q_solar", "outdoor_temp")}
-    d = mgr.evaluate("lr", predicted_peak_temp=22.0, target_temp=22.0,
-                      q_solar=0.05, outdoor_temp=20.0, **kwargs)
+    d = mgr.evaluate("lr", predicted_peak_temp=22.0, target_temp=22.0, q_solar=0.05, outdoor_temp=20.0, **kwargs)
     assert d.changed is True
     assert d.target_position == 100
     assert "low_solar" in d.reason
@@ -713,13 +761,18 @@ def test_forced_to_low_solar_retract_immediate(mock_t):
 
 # ── Night close boundary tests ────────────────────────────────────────
 
+
 @patch("custom_components.roommind.managers.cover_manager.time")
 def test_night_close_at_zero_elevation(mock_t):
     """Night close triggers when forced_position=0 with reason night_close."""
     mock_t.time.return_value = 1000.0
     mgr = CoverManager()
-    d = mgr.evaluate("lr", predicted_peak_temp=20.0, target_temp=22.0,
-                      **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "night_close"})
+    d = mgr.evaluate(
+        "lr",
+        predicted_peak_temp=20.0,
+        target_temp=22.0,
+        **{**_BASE_KWARGS, "forced_position": 0, "forced_reason": "night_close"},
+    )
     assert d.target_position == 0
     assert "night_close" in d.reason
 
@@ -734,6 +787,7 @@ def test_no_night_close_when_no_forced_position(mock_t):
 
 
 # ── Mixed availability tests ──────────────────────────────────────────
+
 
 @patch("custom_components.roommind.managers.cover_manager.time")
 def test_evaluate_with_multiple_cover_entities(mock_t):
@@ -752,8 +806,12 @@ async def test_async_apply_mixed_availability(mock_t):
     """async_apply only commands available covers, skipping unavailable ones."""
     mock_t.time.return_value = 1000.0
     mgr = CoverManager()
-    d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0,
-                      **{**_BASE_KWARGS, "cover_entity_ids": ["cover.ok", "cover.gone"]})
+    d = mgr.evaluate(
+        "lr",
+        predicted_peak_temp=25.0,
+        target_temp=22.0,
+        **{**_BASE_KWARGS, "cover_entity_ids": ["cover.ok", "cover.gone"]},
+    )
 
     hass = MagicMock()
     hass.services.async_call = AsyncMock()

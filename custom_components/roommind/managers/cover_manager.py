@@ -1,4 +1,5 @@
 """Cover/blind manager for RoomMind smart home control."""
+
 from __future__ import annotations
 
 import logging
@@ -42,9 +43,9 @@ def compute_shading_factor(
 class CoverDecision:
     """Result of CoverManager.evaluate() for a single room."""
 
-    target_position: int   # 0-100 (HA: 0=closed, 100=open)
-    changed: bool          # True if caller should call HA service
-    reason: str            # For debug logging
+    target_position: int  # 0-100 (HA: 0=closed, 100=open)
+    changed: bool  # True if caller should call HA service
+    reason: str  # For debug logging
 
 
 @dataclass
@@ -84,9 +85,10 @@ class CoverManager:
         ):
             state.user_override_until = time.time() + override_minutes * 60
             _LOGGER.info(
-                "Cover user override detected [%s]: position %d vs commanded %d"
-                " → pausing %d min",
-                area_id, position, state.last_commanded_position,
+                "Cover user override detected [%s]: position %d vs commanded %d → pausing %d min",
+                area_id,
+                position,
+                state.last_commanded_position,
                 override_minutes,
             )
         state.current_position = position
@@ -130,13 +132,11 @@ class CoverManager:
 
         # Gate 2: Manual override — never fight the user
         if has_active_override:
-            return CoverDecision(target_position=current, changed=False,
-                                 reason="manual_override_active")
+            return CoverDecision(target_position=current, changed=False, reason="manual_override_active")
 
         # Gate 2b: User manually moved cover (e.g. opened for balcony)
         if state.user_override_until > time.time():
-            return CoverDecision(target_position=current, changed=False,
-                                 reason="user_override_active")
+            return CoverDecision(target_position=current, changed=False, reason="user_override_active")
 
         # Gate 2c: Forced position (schedule or night close) — immediate, no rate limit
         # User-defined schedules and night close should always apply instantly.
@@ -144,8 +144,9 @@ class CoverManager:
         if forced_position is not None:
             state.last_was_forced = True
             if forced_position == current:
-                return CoverDecision(target_position=current, changed=False,
-                                     reason=f"forced_at_target({forced_reason})")
+                return CoverDecision(
+                    target_position=current, changed=False, reason=f"forced_at_target({forced_reason})"
+                )
             return self._apply_change(state, forced_position, f"forced({forced_reason})")
 
         # Gate 3: Safety check — predicted_peak_temp must be available
@@ -194,11 +195,7 @@ class CoverManager:
         if desired_pos == current:
             return CoverDecision(target_position=desired_pos, changed=False, reason="at_target")
 
-        reason = (
-            f"deploy(excess={excess:.2f}°C→pos={desired_pos}%)"
-            if desired_pos < 100
-            else "retract"
-        )
+        reason = f"deploy(excess={excess:.2f}°C→pos={desired_pos}%)" if desired_pos < 100 else "retract"
         return self._apply_change(state, desired_pos, reason)
 
     def remove_room(self, area_id: str) -> None:
@@ -230,19 +227,22 @@ class CoverManager:
 
         if position_eids:
             await hass.services.async_call(
-                "cover", "set_cover_position",
+                "cover",
+                "set_cover_position",
                 {"entity_id": position_eids, "position": target_position},
                 blocking=False,
             )
         if binary_open_eids:
             await hass.services.async_call(
-                "cover", "open_cover",
+                "cover",
+                "open_cover",
                 {"entity_id": binary_open_eids},
                 blocking=False,
             )
         if binary_close_eids:
             await hass.services.async_call(
-                "cover", "close_cover",
+                "cover",
+                "close_cover",
                 {"entity_id": binary_close_eids},
                 blocking=False,
             )
@@ -256,9 +256,7 @@ class CoverManager:
             self._states[area_id] = _RoomCoverState()
         return self._states[area_id]
 
-    def _apply_change(
-        self, state: _RoomCoverState, position: int, reason: str
-    ) -> CoverDecision:
+    def _apply_change(self, state: _RoomCoverState, position: int, reason: str) -> CoverDecision:
         state.current_position = position
         state.last_commanded_position = position
         state.last_change_ts = time.time()

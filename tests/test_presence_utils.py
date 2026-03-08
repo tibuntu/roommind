@@ -24,9 +24,7 @@ def test_presence_enabled_but_no_persons_returns_false():
 def test_binary_sensor_off_counts_as_away():
     """binary_sensor 'off' means not home → if all away, returns True."""
     hass = MagicMock()
-    hass.states.get = MagicMock(
-        return_value=_make_state("binary_sensor.motion", "off")
-    )
+    hass.states.get = MagicMock(return_value=_make_state("binary_sensor.motion", "off"))
     settings = {"presence_enabled": True, "presence_persons": ["binary_sensor.motion"]}
     assert is_presence_away(hass, {}, settings) is True
 
@@ -34,8 +32,6 @@ def test_binary_sensor_off_counts_as_away():
 def test_binary_sensor_on_counts_as_home():
     """binary_sensor 'on' means home → returns False."""
     hass = MagicMock()
-    hass.states.get = MagicMock(
-        return_value=_make_state("binary_sensor.motion", "on")
-    )
+    hass.states.get = MagicMock(return_value=_make_state("binary_sensor.motion", "on"))
     settings = {"presence_enabled": True, "presence_persons": ["binary_sensor.motion"]}
     assert is_presence_away(hass, {}, settings) is False

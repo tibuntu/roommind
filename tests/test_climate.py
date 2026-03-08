@@ -1,11 +1,11 @@
 """Tests for RoomMind climate platform."""
+
 from __future__ import annotations
 
 import time
-
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from homeassistant.components.climate import HVACMode
 
 from custom_components.roommind.climate import (
@@ -147,11 +147,14 @@ async def test_set_temperature(mock_coordinator):
     store.async_update_room = AsyncMock()
     entity = RoomMindOverrideClimate(coordinator, "living_room")
     await entity.async_set_temperature(temperature=22.0)
-    store.async_update_room.assert_awaited_once_with("living_room", {
-        "override_temp": 22.0,
-        "override_until": None,
-        "override_type": OVERRIDE_CUSTOM,
-    })
+    store.async_update_room.assert_awaited_once_with(
+        "living_room",
+        {
+            "override_temp": 22.0,
+            "override_until": None,
+            "override_type": OVERRIDE_CUSTOM,
+        },
+    )
     coordinator.async_request_refresh.assert_awaited_once()
 
 
@@ -172,11 +175,14 @@ async def test_set_hvac_mode_off_clears_override(mock_coordinator):
     store.async_update_room = AsyncMock()
     entity = RoomMindOverrideClimate(coordinator, "living_room")
     await entity.async_set_hvac_mode(HVACMode.OFF)
-    store.async_update_room.assert_awaited_once_with("living_room", {
-        "override_temp": None,
-        "override_until": None,
-        "override_type": None,
-    })
+    store.async_update_room.assert_awaited_once_with(
+        "living_room",
+        {
+            "override_temp": None,
+            "override_until": None,
+            "override_type": None,
+        },
+    )
     coordinator.async_request_refresh.assert_awaited_once()
 
 
@@ -192,11 +198,14 @@ async def test_set_hvac_mode_auto_activates_with_default(mock_coordinator):
     store.async_update_room = AsyncMock()
     entity = RoomMindOverrideClimate(coordinator, "living_room")
     await entity.async_set_hvac_mode(HVACMode.AUTO)
-    store.async_update_room.assert_awaited_once_with("living_room", {
-        "override_temp": DEFAULT_COMFORT_TEMP,
-        "override_until": None,
-        "override_type": OVERRIDE_CUSTOM,
-    })
+    store.async_update_room.assert_awaited_once_with(
+        "living_room",
+        {
+            "override_temp": DEFAULT_COMFORT_TEMP,
+            "override_until": None,
+            "override_type": OVERRIDE_CUSTOM,
+        },
+    )
     coordinator.async_request_refresh.assert_awaited_once()
 
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from homeassistant.const import UnitOfTemperature
 
 from custom_components.roommind.managers.weather_manager import WeatherManager
@@ -13,9 +12,7 @@ from custom_components.roommind.managers.weather_manager import WeatherManager
 
 def _make_hass(fahrenheit: bool = False) -> MagicMock:
     hass = MagicMock()
-    hass.config.units.temperature_unit = (
-        UnitOfTemperature.FAHRENHEIT if fahrenheit else UnitOfTemperature.CELSIUS
-    )
+    hass.config.units.temperature_unit = UnitOfTemperature.FAHRENHEIT if fahrenheit else UnitOfTemperature.CELSIUS
     hass.states.get = MagicMock(return_value=None)
     return hass
 
@@ -33,9 +30,9 @@ async def test_no_weather_entity_returns_empty():
 async def test_service_response_parsed_and_stored():
     """Successful get_forecasts service call returns converted forecast."""
     hass = _make_hass()
-    hass.services.async_call = AsyncMock(return_value={
-        "weather.home": {"forecast": [{"temperature": 10.0}, {"temperature": 12.0}]}
-    })
+    hass.services.async_call = AsyncMock(
+        return_value={"weather.home": {"forecast": [{"temperature": 10.0}, {"temperature": 12.0}]}}
+    )
 
     mgr = WeatherManager(hass)
     result = await mgr.async_read_forecast({"weather_entity": "weather.home"})
@@ -49,9 +46,11 @@ async def test_service_response_parsed_and_stored():
 async def test_service_response_converts_fahrenheit():
     """Forecast temperatures are converted from °F to °C when HA uses Fahrenheit."""
     hass = _make_hass(fahrenheit=True)
-    hass.services.async_call = AsyncMock(return_value={
-        "weather.home": {"forecast": [{"temperature": 50.0}]}  # 50°F = 10°C
-    })
+    hass.services.async_call = AsyncMock(
+        return_value={
+            "weather.home": {"forecast": [{"temperature": 50.0}]}  # 50°F = 10°C
+        }
+    )
 
     mgr = WeatherManager(hass)
     result = await mgr.async_read_forecast({"weather_entity": "weather.home"})

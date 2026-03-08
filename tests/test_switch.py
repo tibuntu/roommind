@@ -1,15 +1,17 @@
 """Tests for RoomMind switch platform."""
+
 from __future__ import annotations
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from custom_components.roommind.const import DOMAIN
 from custom_components.roommind.switch import (
     RoomMindCoverAutoSwitch,
     _create_room_switches,
     async_setup_entry,
 )
-from custom_components.roommind.const import DOMAIN
 
 
 @pytest.fixture

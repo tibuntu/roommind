@@ -1,4 +1,5 @@
 """Binary sensor platform for RoomMind."""
+
 from __future__ import annotations
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
@@ -12,7 +13,8 @@ from .coordinator import RoomMindCoordinator
 
 
 def _create_room_binary_sensors(
-    coordinator: RoomMindCoordinator, area_id: str,
+    coordinator: RoomMindCoordinator,
+    area_id: str,
 ) -> list[BinarySensorEntity]:
     """Create binary sensor entities for a room."""
     return [RoomMindCoverPausedSensor(coordinator, area_id)]
