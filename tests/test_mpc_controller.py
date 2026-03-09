@@ -3418,3 +3418,153 @@ async def test_proportional_ac_managed_mode_unchanged():
     temp_calls = [c for c in calls if c[0][1] == "set_temperature"]
     # Managed mode: AC should get actual target (21.0), not proportional boost
     assert any(c[0][2]["temperature"] == 21.0 for c in temp_calls)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic boost target tests (#76)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dynamic_heating_boost_trv_full_power():
+    """TRV at full power uses dynamic boost target (35) instead of default 30."""
+    hass = build_hass()
+    trv_state = MagicMock()
+    trv_state.state = "off"
+    trv_state.attributes = {"hvac_modes": ["heat", "off"], "temperature": 20.0, "max_temp": 35.0}
+    hass.states.get = MagicMock(return_value=trv_state)
+
+    room = make_room(thermostats=["climate.trv"], acs=[])
+    ctrl = MPCController(
+        hass,
+        room,
+        model_manager=RoomModelManager(),
+        outdoor_temp=5.0,
+        settings={},
+        has_external_sensor=True,
+    )
+    await ctrl.async_apply("heating", 21.0, power_fraction=1.0, current_temp=20.0, heating_boost_target=35.0)
+
+    temp_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_temperature"]
+    assert any(c[0][2]["temperature"] == 35.0 for c in temp_calls)
+
+
+@pytest.mark.asyncio
+async def test_dynamic_heating_boost_none_fallback():
+    """When heating_boost_target is None, falls back to HEATING_BOOST_TARGET (30)."""
+    hass = build_hass()
+    trv_state = MagicMock()
+    trv_state.state = "off"
+    trv_state.attributes = {"hvac_modes": ["heat", "off"], "temperature": 20.0}
+    hass.states.get = MagicMock(return_value=trv_state)
+
+    room = make_room(thermostats=["climate.trv"], acs=[])
+    ctrl = MPCController(
+        hass,
+        room,
+        model_manager=RoomModelManager(),
+        outdoor_temp=5.0,
+        settings={},
+        has_external_sensor=True,
+    )
+    await ctrl.async_apply("heating", 21.0, power_fraction=1.0, current_temp=20.0, heating_boost_target=None)
+
+    temp_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_temperature"]
+    assert any(c[0][2]["temperature"] == 30.0 for c in temp_calls)
+
+
+@pytest.mark.asyncio
+async def test_dynamic_heating_boost_proportional():
+    """TRV at 50% power with dynamic boost=35: 20 + 0.5*(35-20) = 27.5."""
+    hass = build_hass()
+    trv_state = MagicMock()
+    trv_state.state = "off"
+    trv_state.attributes = {"hvac_modes": ["heat", "off"], "temperature": 20.0, "max_temp": 35.0}
+    hass.states.get = MagicMock(return_value=trv_state)
+
+    room = make_room(thermostats=["climate.trv"], acs=[])
+    ctrl = MPCController(
+        hass,
+        room,
+        model_manager=RoomModelManager(),
+        outdoor_temp=5.0,
+        settings={},
+        has_external_sensor=True,
+    )
+    await ctrl.async_apply("heating", 21.0, power_fraction=0.5, current_temp=20.0, heating_boost_target=35.0)
+
+    temp_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_temperature"]
+    assert any(c[0][2]["temperature"] == 27.5 for c in temp_calls)
+
+
+@pytest.mark.asyncio
+async def test_dynamic_cooling_boost_full_power():
+    """AC at full cooling power uses dynamic boost (18) instead of default 16."""
+    hass = build_hass()
+    ac_state = MagicMock()
+    ac_state.state = "off"
+    ac_state.attributes = {"hvac_modes": ["cool", "off"], "temperature": 23.0, "min_temp": 18.0}
+    hass.states.get = MagicMock(return_value=ac_state)
+
+    room = make_room(thermostats=[], acs=["climate.ac"])
+    ctrl = MPCController(
+        hass,
+        room,
+        model_manager=RoomModelManager(),
+        outdoor_temp=35.0,
+        settings={},
+        has_external_sensor=True,
+    )
+    await ctrl.async_apply("cooling", 23.0, power_fraction=1.0, current_temp=26.0, cooling_boost_target=18.0)
+
+    temp_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_temperature"]
+    assert any(c[0][2]["temperature"] == 18.0 for c in temp_calls)
+
+
+@pytest.mark.asyncio
+async def test_dynamic_cooling_boost_none_fallback():
+    """When cooling_boost_target is None, falls back to AC_COOLING_BOOST_TARGET (16)."""
+    hass = build_hass()
+    ac_state = MagicMock()
+    ac_state.state = "off"
+    ac_state.attributes = {"hvac_modes": ["cool", "off"], "temperature": 23.0}
+    hass.states.get = MagicMock(return_value=ac_state)
+
+    room = make_room(thermostats=[], acs=["climate.ac"])
+    ctrl = MPCController(
+        hass,
+        room,
+        model_manager=RoomModelManager(),
+        outdoor_temp=35.0,
+        settings={},
+        has_external_sensor=True,
+    )
+    await ctrl.async_apply("cooling", 23.0, power_fraction=1.0, current_temp=26.0, cooling_boost_target=None)
+
+    temp_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_temperature"]
+    # 26 - 1.0*(26-16) = 16.0
+    assert any(c[0][2]["temperature"] == 16.0 for c in temp_calls)
+
+
+@pytest.mark.asyncio
+async def test_dynamic_ac_heating_boost():
+    """AC in heating mode uses ac_heating_boost_target instead of default 30."""
+    hass = build_hass()
+    ac_state = MagicMock()
+    ac_state.state = "off"
+    ac_state.attributes = {"hvac_modes": ["heat", "cool", "off"], "temperature": 20.0, "max_temp": 28.0}
+    hass.states.get = MagicMock(return_value=ac_state)
+
+    room = make_room(thermostats=[], acs=["climate.ac"])
+    ctrl = MPCController(
+        hass,
+        room,
+        model_manager=RoomModelManager(),
+        outdoor_temp=5.0,
+        settings={},
+        has_external_sensor=True,
+    )
+    await ctrl.async_apply("heating", 21.0, power_fraction=1.0, current_temp=20.0, ac_heating_boost_target=28.0)
+
+    temp_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_temperature"]
+    assert any(c[0][2]["temperature"] == 28.0 for c in temp_calls)

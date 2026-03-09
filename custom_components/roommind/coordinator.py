@@ -455,6 +455,26 @@ class RoomMindCoordinator(DataUpdateCoordinator):
                 q_residual=q_residual,
             )
 
+        # Read device temperature limits for dynamic boost targets
+        trv_max_temps: list[float] = []
+        for eid in room.get("thermostats", []):
+            st = self.hass.states.get(eid)
+            if st and st.attributes.get("max_temp") is not None:
+                trv_max_temps.append(st.attributes["max_temp"])
+        device_max_temp = min(trv_max_temps) if trv_max_temps else None
+
+        ac_min_temps: list[float] = []
+        ac_max_temps: list[float] = []
+        for eid in room.get("acs", []):
+            st = self.hass.states.get(eid)
+            if st:
+                if st.attributes.get("min_temp") is not None:
+                    ac_min_temps.append(st.attributes["min_temp"])
+                if st.attributes.get("max_temp") is not None:
+                    ac_max_temps.append(st.attributes["max_temp"])
+        device_min_temp = max(ac_min_temps) if ac_min_temps else None
+        ac_device_max_temp = min(ac_max_temps) if ac_max_temps else None
+
         # Exclude TRVs currently being valve-protection-cycled from normal control
         cycling_eids = {eid for eid in room.get("thermostats", []) if eid in self._valve_manager._cycling}
         if climate_active:
@@ -465,6 +485,9 @@ class RoomMindCoordinator(DataUpdateCoordinator):
                     power_fraction=power_fraction,
                     current_temp=current_temp,
                     exclude_eids=cycling_eids,
+                    heating_boost_target=device_max_temp,
+                    ac_heating_boost_target=ac_device_max_temp,
+                    cooling_boost_target=device_min_temp,
                 )
             except Exception:  # noqa: BLE001
                 _LOGGER.warning(
@@ -550,22 +573,6 @@ class RoomMindCoordinator(DataUpdateCoordinator):
         # Reuse MPC active status computed by cover orchestrator
         mpc_active = cover_result.mpc_active
 
-        # Minimum max_temp across thermostats (for UI display clamping)
-        trv_max_temps = []
-        for eid in room.get("thermostats", []):
-            st = self.hass.states.get(eid)
-            if st and st.attributes.get("max_temp") is not None:
-                trv_max_temps.append(st.attributes["max_temp"])
-        device_max_temp = min(trv_max_temps) if trv_max_temps else None
-
-        # Maximum min_temp across ACs (for UI display clamping)
-        ac_min_temps = []
-        for eid in room.get("acs", []):
-            st = self.hass.states.get(eid)
-            if st and st.attributes.get("min_temp") is not None:
-                ac_min_temps.append(st.attributes["min_temp"])
-        device_min_temp = max(ac_min_temps) if ac_min_temps else None
-
         # Compute display mode: when control is off, show actual device state
         # without affecting internal tracking (residual heat, valve actuation,
         # _previous_modes).  See #36.
@@ -639,22 +646,20 @@ class RoomMindCoordinator(DataUpdateCoordinator):
             return None
 
         if mode == MODE_HEATING:
-            boost = HEATING_BOOST_TARGET if has_thermostats else AC_HEATING_BOOST_TARGET
+            default_boost = HEATING_BOOST_TARGET if has_thermostats else AC_HEATING_BOOST_TARGET
+            boost = device_max_temp if device_max_temp is not None else default_boost
             if not has_thermostats and not has_acs:
                 return None
             sp = round(current_temp + power_fraction * (boost - current_temp), 1)
             sp = max(target_temp, sp)
             sp = min(boost, sp)
-            if device_max_temp is not None:
-                sp = min(sp, device_max_temp)
             return sp
 
         if mode == MODE_COOLING and has_acs:
-            sp = round(current_temp - power_fraction * (current_temp - AC_COOLING_BOOST_TARGET), 1)
-            sp = max(AC_COOLING_BOOST_TARGET, sp)
+            boost = device_min_temp if device_min_temp is not None else AC_COOLING_BOOST_TARGET
+            sp = round(current_temp - power_fraction * (current_temp - boost), 1)
+            sp = max(boost, sp)
             sp = min(target_temp, sp)
-            if device_min_temp is not None:
-                sp = max(sp, device_min_temp)
             return sp
 
         return None

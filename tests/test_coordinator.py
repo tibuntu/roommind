@@ -3246,10 +3246,11 @@ class TestComputeDeviceSetpoint:
 
     def test_clamped_to_device_max_temp(self, hass, mock_config_entry):
         coordinator = _create_coordinator(hass, mock_config_entry)
-        # power_fraction=0.5, current=20 → sp = 25.0, but device max is 25
+        # device_max_temp=25 is now used AS the boost target
+        # power_fraction=0.5, current=20, boost=25 → sp = 20 + 0.5*(25-20) = 22.5
         result = coordinator._compute_device_setpoint("heating", 0.5, 20.0, 21.0, True, device_max_temp=25.0)
-        assert result == 25.0
-        # power_fraction=1.0, current=20 → sp = 30.0, but device max is 25
+        assert result == 22.5
+        # power_fraction=1.0, current=20, boost=25 → sp = 25.0
         result = coordinator._compute_device_setpoint("heating", 1.0, 20.0, 21.0, True, device_max_temp=25.0)
         assert result == 25.0
 
@@ -3314,6 +3315,52 @@ class TestComputeDeviceSetpoint:
             True,
         )
         assert result == 25.0
+
+    def test_dynamic_boost_uses_device_max_temp(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        # device_max_temp=35 used as boost: 20 + 1.0*(35-20) = 35.0
+        result = coordinator._compute_device_setpoint("heating", 1.0, 20.0, 21.0, True, device_max_temp=35.0)
+        assert result == 35.0
+
+    def test_dynamic_boost_proportional(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        # device_max_temp=35, pf=0.5: 20 + 0.5*(35-20) = 27.5
+        result = coordinator._compute_device_setpoint("heating", 0.5, 20.0, 21.0, True, device_max_temp=35.0)
+        assert result == 27.5
+
+    def test_dynamic_boost_below_default(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        # device_max_temp=25, pf=1.0: 20 + 1.0*(25-20) = 25.0
+        result = coordinator._compute_device_setpoint("heating", 1.0, 20.0, 21.0, True, device_max_temp=25.0)
+        assert result == 25.0
+
+    def test_dynamic_cooling_boost_uses_device_min_temp(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        # device_min_temp=18 as boost: 26 - 1.0*(26-18) = 18.0
+        result = coordinator._compute_device_setpoint(
+            "cooling",
+            1.0,
+            26.0,
+            23.0,
+            True,
+            device_min_temp=18.0,
+            has_acs=True,
+        )
+        assert result == 18.0
+
+    def test_dynamic_cooling_boost_proportional(self, hass, mock_config_entry):
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        # device_min_temp=18, pf=0.5: 26 - 0.5*(26-18) = 22.0
+        result = coordinator._compute_device_setpoint(
+            "cooling",
+            0.5,
+            26.0,
+            23.0,
+            True,
+            device_min_temp=18.0,
+            has_acs=True,
+        )
+        assert result == 22.0
 
 
 # ---------------------------------------------------------------------------

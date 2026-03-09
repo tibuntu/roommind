@@ -600,6 +600,9 @@ class MPCController:
         exclude_eids: set[str] | None = None,
         *,
         target_temp: float | None | object = _SENTINEL,
+        heating_boost_target: float | None = None,
+        ac_heating_boost_target: float | None = None,
+        cooling_boost_target: float | None = None,
     ) -> None:
         """Apply the determined mode with proportional valve control."""
         # Backward compat: accept legacy keyword
@@ -625,6 +628,11 @@ class MPCController:
         # After the guard above, target_temp is guaranteed non-None for HEATING/COOLING.
         # We assign a typed local for downstream use.
         effective_target: float = target_temp if target_temp is not None else 0.0
+
+        # Dynamic boost: use device-reported limits, fall back to constants
+        trv_heat_boost = heating_boost_target if heating_boost_target is not None else HEATING_BOOST_TARGET
+        ac_heat_boost = ac_heating_boost_target if ac_heating_boost_target is not None else AC_HEATING_BOOST_TARGET
+        ac_cool_boost = cooling_boost_target if cooling_boost_target is not None else AC_COOLING_BOOST_TARGET
 
         can_heat, can_cool = self._get_can_heat_cool()
 
@@ -674,15 +682,15 @@ class MPCController:
             # Proportional TRV setpoint for Full Control mode
             if self.has_external_sensor and current_temp is not None:
                 trv_target = round(
-                    current_temp + power_fraction * (HEATING_BOOST_TARGET - current_temp),
+                    current_temp + power_fraction * (trv_heat_boost - current_temp),
                     1,
                 )
                 # Floor: never below target (TRV must always aim to heat toward target)
                 trv_target = max(effective_target, trv_target)
                 # Ceiling: never above boost target
-                trv_target = min(HEATING_BOOST_TARGET, trv_target)
+                trv_target = min(trv_heat_boost, trv_target)
             else:
-                trv_target = HEATING_BOOST_TARGET if self.has_external_sensor else effective_target
+                trv_target = trv_heat_boost if self.has_external_sensor else effective_target
             ha_trv = celsius_to_ha_temp(self.hass, trv_target)
             for eid in thermostats:
                 await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "heat"})
@@ -690,11 +698,11 @@ class MPCController:
             # ACs: proportional setpoint in Full Control, actual target otherwise
             if self.has_external_sensor and current_temp is not None:
                 ac_heat_target = round(
-                    current_temp + power_fraction * (AC_HEATING_BOOST_TARGET - current_temp),
+                    current_temp + power_fraction * (ac_heat_boost - current_temp),
                     1,
                 )
                 ac_heat_target = max(effective_target, ac_heat_target)
-                ac_heat_target = min(AC_HEATING_BOOST_TARGET, ac_heat_target)
+                ac_heat_target = min(ac_heat_boost, ac_heat_target)
             else:
                 ac_heat_target = effective_target
             ha_ac_target = celsius_to_ha_temp(self.hass, ac_heat_target)
@@ -715,10 +723,10 @@ class MPCController:
         elif mode == MODE_COOLING:
             if self.has_external_sensor and current_temp is not None:
                 ac_cool_target = round(
-                    current_temp - power_fraction * (current_temp - AC_COOLING_BOOST_TARGET),
+                    current_temp - power_fraction * (current_temp - ac_cool_boost),
                     1,
                 )
-                ac_cool_target = max(AC_COOLING_BOOST_TARGET, ac_cool_target)
+                ac_cool_target = max(ac_cool_boost, ac_cool_target)
                 ac_cool_target = min(effective_target, ac_cool_target)
             else:
                 ac_cool_target = effective_target
