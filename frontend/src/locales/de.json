@@ -32,6 +32,8 @@
   "room.confirm_delete": "RoomMind-Konfiguration für \"{name}\" entfernen?",
   "room.error_save_fallback": "Konfiguration konnte nicht gespeichert werden",
   "room.error_delete_fallback": "Konfiguration konnte nicht gelöscht werden",
+  "room.outdoor_toggle": "Außenbereich",
+  "room.outdoor_hint": "Deaktiviert Klimasteuerung, Schimmelerkennung und Modell-Training. Sensorüberwachung läuft weiter.",
   "room.alias.placeholder": "Eigener Anzeigename",
   "room.alias.clear": "Auf Bereichsname zurücksetzen",
 
@@ -65,6 +67,7 @@
   "card.temp_sensor": "Temperatursensor",
   "card.temp_sensors": "Temperatursensoren",
   "card.no_climate": "Keine Klimageräte",
+  "card.outdoor": "Außen",
   "card.tap_configure": "Tippen zum Konfigurieren",
   "card.mpc_active": "MPC aktiv",
   "card.mpc_learning": "MPC lernt",

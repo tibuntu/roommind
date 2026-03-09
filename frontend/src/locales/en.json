@@ -32,6 +32,8 @@
   "room.confirm_delete": "Remove RoomMind configuration for \"{name}\"?",
   "room.error_save_fallback": "Failed to save configuration",
   "room.error_delete_fallback": "Failed to delete configuration",
+  "room.outdoor_toggle": "Outdoor area",
+  "room.outdoor_hint": "Disables climate control, mold detection, and model training. Sensor monitoring continues.",
   "room.alias.placeholder": "Custom display name",
   "room.alias.clear": "Reset to area name",
 
@@ -65,6 +67,7 @@
   "card.temp_sensor": "temp sensor",
   "card.temp_sensors": "temp sensors",
   "card.no_climate": "No climate devices",
+  "card.outdoor": "Outdoor",
   "card.tap_configure": "Tap to configure",
   "card.mpc_active": "MPC active",
   "card.mpc_learning": "MPC learning",

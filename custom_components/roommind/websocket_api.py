@@ -72,6 +72,7 @@ _ROOM_SAVE_FIELDS = (
     "cover_schedule_selector_entity",
     "covers_night_close",
     "covers_night_position",
+    "is_outdoor",
 )
 
 _SETTINGS_SAVE_FIELDS = (
@@ -249,6 +250,7 @@ async def websocket_list_rooms(
         vol.Optional("cover_schedule_selector_entity"): str,
         vol.Optional("covers_night_close"): bool,
         vol.Optional("covers_night_position"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+        vol.Optional("is_outdoor"): bool,
     }
 )
 @websocket_api.async_response

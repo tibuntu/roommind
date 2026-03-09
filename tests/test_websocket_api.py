@@ -1640,6 +1640,29 @@ def test_save_room_cover_night_position_validation():
         validator(-1)
 
 
+@pytest.mark.asyncio
+async def test_save_room_with_is_outdoor(ws_hass, store, connection):
+    """Round-trip: save a room with is_outdoor=True and verify it persists."""
+    await store.async_load()
+
+    msg = {
+        "id": 10,
+        "type": "roommind/rooms/save",
+        "area_id": "terrasse",
+        "is_outdoor": True,
+    }
+    await _save_room(ws_hass, connection, msg)
+
+    connection.send_result.assert_called_once()
+    call_args = connection.send_result.call_args
+    room = call_args[0][1]["room"]
+    assert room["is_outdoor"] is True
+
+    # Verify it persists in the store
+    stored = store.get_room("terrasse")
+    assert stored["is_outdoor"] is True
+
+
 def test_save_room_cover_deploy_threshold_rejects_negative():
     """covers_deploy_threshold rejects negative values."""
     import voluptuous as vol

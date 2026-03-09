@@ -16,6 +16,7 @@ export class RsHeroStatus extends LitElement {
   @property({ attribute: false }) public area!: HassArea;
   @property({ attribute: false }) public config: RoomConfig | null = null;
   @property({ type: Boolean }) public climateControlActive = true;
+  @property({ type: Boolean }) public isOutdoor = false;
   /** Optimistic override state passed from parent for instant feedback. */
   @property({ attribute: false }) public overrideInfo: {
     active: boolean;
@@ -469,7 +470,7 @@ export class RsHeroStatus extends LitElement {
                   ></ha-icon-button>
                 </div>
               `}
-          ${live
+          ${live && !this.isOutdoor
             ? html`
                 <span class="mode-pill ${getModeClass(live.mode)}">
                   <span class="mode-dot"></span>
@@ -483,7 +484,7 @@ export class RsHeroStatus extends LitElement {
         </div>
         ${live
           ? html`
-              ${live.window_open
+              ${live.window_open && !this.isOutdoor
                 ? html`<div class="hero-window-open">
                     <ha-icon icon="mdi:window-open-variant"></ha-icon>
                     ${localize("hero.window_open", this.hass?.language ?? "en")}
@@ -496,7 +497,7 @@ export class RsHeroStatus extends LitElement {
                       <span class="hero-unit">${tempUnit(this.hass)}</span>
                     `
                   : html`<span class="hero-current" style="opacity: 0.3">--</span>`}
-                ${this._renderTargetSection(live)}
+                ${!this.isOutdoor ? this._renderTargetSection(live) : nothing}
               </div>
               ${live.current_humidity !== null
                 ? html`<div class="hero-metric">
@@ -506,7 +507,7 @@ export class RsHeroStatus extends LitElement {
                     })}
                   </div>`
                 : nothing}
-              ${live.device_setpoint != null
+              ${live.device_setpoint != null && !this.isOutdoor
                 ? html`<div class="hero-metric">
                     <ha-icon
                       icon=${live.mode === "cooling" ? "mdi:snowflake" : "mdi:radiator"}
@@ -517,7 +518,7 @@ export class RsHeroStatus extends LitElement {
                     })}
                   </div>`
                 : nothing}
-              ${live.mold_surface_rh != null
+              ${live.mold_surface_rh != null && !this.isOutdoor
                 ? html`<div
                     class="hero-metric ${live.mold_risk_level === "critical"
                       ? "critical"
@@ -531,7 +532,7 @@ export class RsHeroStatus extends LitElement {
                     })}
                   </div>`
                 : nothing}
-              ${live.mold_prevention_active
+              ${live.mold_prevention_active && !this.isOutdoor
                 ? html`<div class="hero-metric info">
                     <ha-icon icon="mdi:shield-check"></ha-icon>
                     ${localize("card.mold_prevention", this.hass?.language ?? "en", {
@@ -540,7 +541,7 @@ export class RsHeroStatus extends LitElement {
                     })}
                   </div>`
                 : nothing}
-              ${!this.climateControlActive
+              ${!this.climateControlActive && !this.isOutdoor
                 ? html`<div class="uncontrolled-hint">
                     ${localize("card.not_controlled", this.hass?.language ?? "en")}
                   </div>`

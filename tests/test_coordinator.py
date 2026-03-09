@@ -4728,3 +4728,70 @@ class TestCoverageGaps:
         # Room should still have a valid target — comfort temps used as fallback
         room_state = result["rooms"]["living_room_abc12345"]
         assert room_state["target_temp"] is not None
+
+    # ------------------------------------------------------------------
+    # Outdoor room: skip control
+    # ------------------------------------------------------------------
+    @pytest.mark.asyncio
+    async def test_outdoor_room_skips_control(self, hass, mock_config_entry):
+        """Outdoor room returns idle state and makes no climate service calls."""
+        outdoor_room = {**SAMPLE_ROOM, "is_outdoor": True}
+        store = _make_store_mock({"living_room_abc12345": outdoor_room})
+        hass.data = {"roommind": {"store": store}}
+        hass.states.get = MagicMock(side_effect=make_mock_states_get())
+        hass.services.async_call = AsyncMock()
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        data = await coordinator._async_update_data()
+
+        room_state = data["rooms"]["living_room_abc12345"]
+        assert room_state["mode"] == MODE_IDLE
+        assert room_state["target_temp"] is None
+        assert room_state["mold_risk_level"] == "ok"
+        assert room_state["mpc_active"] is False
+
+        # No climate service calls should have been made
+        climate_calls = [c for c in hass.services.async_call.call_args_list if c[0][0] == "climate"]
+        assert climate_calls == []
+
+    # ------------------------------------------------------------------
+    # Outdoor room: still records history
+    # ------------------------------------------------------------------
+    @pytest.mark.asyncio
+    async def test_outdoor_room_still_records_history(self, hass, mock_config_entry):
+        """Outdoor room data is still written to the history store."""
+        from custom_components.roommind.const import HISTORY_WRITE_CYCLES
+
+        outdoor_room = {**SAMPLE_ROOM, "is_outdoor": True}
+        store = _make_store_mock({"living_room_abc12345": outdoor_room})
+        hass.data = {"roommind": {"store": store}}
+        hass.states.get = MagicMock(side_effect=make_mock_states_get())
+        hass.services.async_call = AsyncMock()
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        coordinator._history_write_count = HISTORY_WRITE_CYCLES - 1
+
+        await coordinator._async_update_data()
+
+        # history_store.record is called via hass.async_add_executor_job
+        record_calls = [
+            c
+            for c in hass.async_add_executor_job.call_args_list
+            if len(c[0]) >= 2 and hasattr(c[0][0], "__name__") and c[0][0].__name__ == "record"
+        ]
+        # The default _history_store is None, so we need to set one up
+        # Re-run with a mock history store
+        hass.async_add_executor_job.reset_mock()
+        mock_history = MagicMock()
+        mock_history.record = MagicMock()
+        coordinator._history_store = mock_history
+        coordinator._history_write_count = HISTORY_WRITE_CYCLES - 1
+
+        await coordinator._async_update_data()
+
+        # async_add_executor_job should have been called with history_store.record
+        record_calls = [
+            c for c in hass.async_add_executor_job.call_args_list if len(c[0]) >= 1 and c[0][0] is mock_history.record
+        ]
+        assert len(record_calls) == 1
+        assert record_calls[0][0][1] == "living_room_abc12345"

@@ -233,6 +233,19 @@ export class RsAreaCard extends LitElement {
         background: rgba(33, 150, 243, 0.12);
       }
 
+      .outdoor-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        font-weight: 500;
+        padding: 2px 8px 2px 6px;
+        border-radius: 10px;
+        --mdc-icon-size: 14px;
+        color: var(--success-color, #4caf50);
+        background: rgba(76, 175, 80, 0.12);
+      }
+
       .badge-row {
         display: flex;
         gap: 6px;
@@ -358,12 +371,15 @@ export class RsAreaCard extends LitElement {
     const hasClimateDevices = this.climateEntityCount > 0;
     const hasClimateSelected =
       (this.config?.thermostats?.length ?? 0) > 0 || (this.config?.acs?.length ?? 0) > 0;
-    const isConfigured = this.config !== null && hasClimateSelected;
+    const isOutdoor = this.config?.is_outdoor ?? false;
+    const isConfigured = this.config !== null && hasClimateSelected && !isOutdoor;
     const live = this.config?.live;
     const mode = live?.mode;
 
     const hasSensorData =
-      !isConfigured && live && (live.current_temp !== null || live.current_humidity !== null);
+      (!isConfigured || isOutdoor) &&
+      live &&
+      (live.current_temp !== null || live.current_humidity !== null);
     const accentClass = isConfigured
       ? mode === "heating"
         ? "accent-heating"
@@ -535,6 +551,7 @@ export class RsAreaCard extends LitElement {
 
   private _renderSensorOnly() {
     const live = this.config!.live!;
+    const isOutdoor = this.config?.is_outdoor ?? false;
 
     return html`
       <div class="temp-section">
@@ -554,6 +571,12 @@ export class RsAreaCard extends LitElement {
             : nothing}
         </span>
         <span class="badge-row">
+          ${isOutdoor
+            ? html`<span class="outdoor-badge">
+                <ha-icon icon="mdi:tree"></ha-icon>
+                ${localize("card.outdoor", this.hass.language)}
+              </span>`
+            : nothing}
           ${live.mold_risk_level && live.mold_risk_level !== "ok"
             ? html`<span class="mold-badge ${live.mold_risk_level}">
                 <ha-icon icon="mdi:water-alert"></ha-icon>

@@ -222,7 +222,12 @@ class RoomMindCoordinator(DataUpdateCoordinator):
                 except Exception:  # noqa: BLE001
                     _LOGGER.warning("History record failed for '%s'", area_id)
                 # Compute prediction for the *next* write cycle (~3 min ahead)
-                if current_temp is not None and self.outdoor_temp is not None:
+                room_config = rooms.get(area_id, {})
+                if (
+                    current_temp is not None
+                    and self.outdoor_temp is not None
+                    and not room_config.get("is_outdoor", False)
+                ):
                     try:
                         is_window_open = rs.get("window_open", False)
                         if is_window_open:
@@ -306,6 +311,40 @@ class RoomMindCoordinator(DataUpdateCoordinator):
             current_temp = ha_temp_to_celsius(self.hass, raw_dev) if raw_dev is not None else None
 
         current_humidity = read_sensor_value(self.hass, room.get("humidity_sensor"), area_id, "humidity")
+
+        # --- Outdoor room: skip all control logic ---
+        if room.get("is_outdoor", False):
+            return {
+                "area_id": area_id,
+                "current_temp": current_temp,
+                "current_humidity": current_humidity,
+                "target_temp": None,
+                "heat_target": None,
+                "cool_target": None,
+                "mode": MODE_IDLE,
+                "heating_power": 0,
+                "device_setpoint": None,
+                "window_open": False,
+                "override_active": False,
+                "override_type": None,
+                "override_temp": None,
+                "override_until": None,
+                "active_schedule_index": -1,
+                "confidence": None,
+                "mpc_active": False,
+                "presence_away": False,
+                "force_off": False,
+                "mold_risk_level": "ok",
+                "mold_surface_rh": None,
+                "mold_prevention_active": False,
+                "mold_prevention_delta": 0,
+                "shading_factor": 1.0,
+                "n_observations": 0,
+                "blind_position": None,
+                "cover_auto_paused": False,
+                "cover_forced_reason": "",
+                "active_cover_schedule_index": -1,
+            }
 
         # --- Mold risk calculation ---
         mold = await self._mold_manager.evaluate(

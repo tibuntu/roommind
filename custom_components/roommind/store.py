@@ -159,6 +159,7 @@ class RoomMindStore:
                 "cover_schedule_selector_entity": config.get("cover_schedule_selector_entity", ""),
                 "covers_night_close": config.get("covers_night_close", False),
                 "covers_night_position": config.get("covers_night_position", 0),
+                "is_outdoor": config.get("is_outdoor", False),
             }
             self._data[area_id] = room
             await self._async_save()

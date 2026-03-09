@@ -83,6 +83,7 @@ export interface RoomConfig {
   cover_schedule_selector_entity?: string;
   covers_night_close?: boolean;
   covers_night_position?: number;
+  is_outdoor?: boolean;
   live?: RoomLiveData;
 }
 

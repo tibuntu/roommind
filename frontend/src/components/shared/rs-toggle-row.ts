@@ -16,7 +16,7 @@ export class RsToggleRow extends LitElement {
     .toggle-row {
       display: flex;
       justify-content: space-between;
-      align-items: flex-start;
+      align-items: center;
       gap: 16px;
     }
 

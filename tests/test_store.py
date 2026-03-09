@@ -383,3 +383,15 @@ async def test_update_room_missing_raises_key_error(store):
     await store.async_load()
     with pytest.raises(KeyError):
         await store.async_update_room("nonexistent", {"comfort_temp": 21.0})
+
+
+@pytest.mark.asyncio
+async def test_is_outdoor_default(store):
+    """Saving without is_outdoor defaults to False; explicit True persists."""
+    await store.async_load()
+
+    room = await store.async_save_room("terrasse", {})
+    assert room["is_outdoor"] is False
+
+    outdoor = await store.async_save_room("balkon", {"is_outdoor": True})
+    assert outdoor["is_outdoor"] is True
