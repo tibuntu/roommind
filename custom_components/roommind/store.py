@@ -12,6 +12,9 @@ from .const import (
     DEFAULT_COMFORT_HEAT,
     DEFAULT_ECO_COOL,
     DEFAULT_ECO_HEAT,
+    DEFAULT_HEAT_SOURCE_AC_MIN_OUTDOOR,
+    DEFAULT_HEAT_SOURCE_OUTDOOR_THRESHOLD,
+    DEFAULT_HEAT_SOURCE_PRIMARY_DELTA,
     DOMAIN,
 )
 
@@ -161,6 +164,14 @@ class RoomMindStore:
                 "covers_night_position": config.get("covers_night_position", 0),
                 "is_outdoor": config.get("is_outdoor", False),
                 "valve_protection_exclude": config.get("valve_protection_exclude", []),
+                "heat_source_orchestration": config.get("heat_source_orchestration", False),
+                "heat_source_primary_delta": config.get("heat_source_primary_delta", DEFAULT_HEAT_SOURCE_PRIMARY_DELTA),
+                "heat_source_outdoor_threshold": config.get(
+                    "heat_source_outdoor_threshold", DEFAULT_HEAT_SOURCE_OUTDOOR_THRESHOLD
+                ),
+                "heat_source_ac_min_outdoor": config.get(
+                    "heat_source_ac_min_outdoor", DEFAULT_HEAT_SOURCE_AC_MIN_OUTDOOR
+                ),
             }
             self._data[area_id] = room
             await self._async_save()

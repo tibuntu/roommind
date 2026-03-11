@@ -591,6 +591,16 @@ export class RsHeroStatus extends LitElement {
                     })}
                   </div>`
                 : nothing}
+              ${live.active_heat_sources && live.active_heat_sources !== "none" && !this.isOutdoor
+                ? html`<div class="hero-metric">
+                    <ha-icon icon="mdi:swap-horizontal"></ha-icon>
+                    ${live.active_heat_sources === "primary"
+                      ? localize("hero.heat_source_primary", this.hass?.language ?? "en")
+                      : live.active_heat_sources === "secondary"
+                        ? localize("hero.heat_source_secondary", this.hass?.language ?? "en")
+                        : localize("hero.heat_source_both", this.hass?.language ?? "en")}
+                  </div>`
+                : nothing}
               ${live.mold_surface_rh != null && !this.isOutdoor
                 ? html`<div
                     class="hero-metric ${live.mold_risk_level === "critical"

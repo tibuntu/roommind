@@ -48,6 +48,7 @@ export interface RoomLiveData {
   cover_auto_paused: boolean;
   cover_forced_reason: string;
   active_cover_schedule_index: number;
+  active_heat_sources: string | null;
 }
 
 export interface RoomConfig {
@@ -85,6 +86,10 @@ export interface RoomConfig {
   covers_night_position?: number;
   is_outdoor?: boolean;
   valve_protection_exclude?: string[];
+  heat_source_orchestration?: boolean;
+  heat_source_primary_delta?: number;
+  heat_source_outdoor_threshold?: number;
+  heat_source_ac_min_outdoor?: number;
   live?: RoomLiveData;
 }
 

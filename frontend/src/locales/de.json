@@ -62,6 +62,9 @@
   "hero.remaining": "noch {time}",
   "hero.humidity": "{value}% Luftfeuchtigkeit",
   "hero.device_setpoint": "Gerät auf {value}{unit}",
+  "hero.heat_source_primary": "Heizung: TRV",
+  "hero.heat_source_secondary": "Heizung: AC",
+  "hero.heat_source_both": "Heizung: TRV + AC",
   "hero.permanent": "Dauerhaft",
   "hero.waiting": "Warte auf Sensordaten...",
   "hero.not_configured": "Noch nicht konfiguriert",
@@ -415,5 +418,18 @@
   "notifications.cooldown": "Benachrichtigungspause (Minuten)",
   "notifications.cooldown_hint": "Mindestabstand zwischen wiederholten Warnungen pro Raum",
   "notifications.mold_prevention_notify": "Bei Aktivierung der Prävention benachrichtigen",
-  "notifications.mold_prevention_notify_hint": "Auch benachrichtigen wenn die Prävention aktiviert wird (Temperaturerhöhung)"
+  "notifications.mold_prevention_notify_hint": "Auch benachrichtigen wenn die Prävention aktiviert wird (Temperaturerhöhung)",
+
+  "room.section.heat_source": "Heizquellen-Orchestrierung",
+  "heat_source.toggle": "Intelligente Quellenauswahl",
+  "heat_source.toggle_hint": "Wenn dieser Raum sowohl Heizkörper-Thermostate als auch eine AC/Wärmepumpe hat, leitet RoomMind die Heizanforderung intelligent an das effizienteste Gerät weiter, basierend auf Temperaturlücke und Außenbedingungen.",
+  "heat_source.primary_delta": "Boiler-Aktivierungsschwelle",
+  "heat_source.primary_delta_hint": "Primärquelle erst aktivieren, wenn die Temperaturlücke diesen Wert überschreitet. Darunter wird nur die schnelle Sekundärquelle genutzt.",
+  "heat_source.primary_delta_suffix": "°C",
+  "heat_source.outdoor_threshold": "Außentemperatur-Umschaltpunkt",
+  "heat_source.outdoor_threshold_hint": "Über dieser Außentemperatur die AC/Wärmepumpe bevorzugen (höhere Effizienz). Darunter den Gas-Boiler/Heizkörper.",
+  "heat_source.outdoor_threshold_suffix": "°C",
+  "heat_source.ac_min_outdoor": "Min. Außentemp. für AC-Heizen",
+  "heat_source.ac_min_outdoor_hint": "AC-Heizen unter dieser Temperatur komplett deaktivieren, um die Wärmepumpen-Hardware zu schützen.",
+  "heat_source.ac_min_outdoor_suffix": "°C"
 }

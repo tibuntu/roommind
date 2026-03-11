@@ -6,7 +6,7 @@ import logging
 import math
 import time
 from collections.abc import Callable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from homeassistant.core import HomeAssistant
 
@@ -29,6 +29,9 @@ from ..utils.temp_utils import celsius_to_ha_temp
 from .mpc_optimizer import MPCOptimizer, MPCPlan
 from .residual_heat import get_min_run_blocks
 from .thermal_model import RoomModelManager
+
+if TYPE_CHECKING:
+    from ..managers.heat_source_orchestrator import HeatSourcePlan
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -662,6 +665,7 @@ class MPCController:
         heating_boost_target: float | None = None,
         ac_heating_boost_target: float | None = None,
         cooling_boost_target: float | None = None,
+        heat_source_plan: HeatSourcePlan | None = None,
     ) -> None:
         """Apply the determined mode with proportional valve control."""
         # Backward compat: accept legacy keyword
@@ -753,6 +757,81 @@ class MPCController:
                     )
                 else:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "off"})
+            return
+
+        if mode == MODE_HEATING and heat_source_plan is not None:
+            # Orchestrated heating: route power to specific devices per plan
+            for cmd in heat_source_plan.commands:
+                if cmd.entity_id in _exclude:
+                    continue
+                if cmd.active:
+                    if cmd.device_type == "thermostat":
+                        if self.has_external_sensor and current_temp is not None:
+                            t = round(
+                                current_temp + cmd.power_fraction * (trv_heat_boost - current_temp),
+                                1,
+                            )
+                            t = max(effective_target, t)
+                            t = min(trv_heat_boost, t)
+                        else:
+                            t = trv_heat_boost if self.has_external_sensor else effective_target
+                        ha_t = celsius_to_ha_temp(self.hass, t)
+                        await self._call("set_hvac_mode", {"entity_id": cmd.entity_id, "hvac_mode": "heat"})
+                        await self._call(
+                            "set_temperature",
+                            {"entity_id": cmd.entity_id, "temperature": ha_t},
+                            temp_intent="heat",
+                        )
+                    else:  # ac
+                        if self.has_external_sensor and current_temp is not None:
+                            t = round(
+                                current_temp + cmd.power_fraction * (ac_heat_boost - current_temp),
+                                1,
+                            )
+                            t = max(effective_target, t)
+                            t = min(ac_heat_boost, t)
+                        else:
+                            t = effective_target
+                        ha_t = celsius_to_ha_temp(self.hass, t)
+                        ac_state = self.hass.states.get(cmd.entity_id)
+                        ac_modes = (ac_state.attributes.get("hvac_modes") or []) if ac_state else []
+                        if "heat" in ac_modes:
+                            await self._call("set_hvac_mode", {"entity_id": cmd.entity_id, "hvac_mode": "heat"})
+                            await self._call(
+                                "set_temperature",
+                                {"entity_id": cmd.entity_id, "temperature": ha_t},
+                                temp_intent="heat",
+                            )
+                        elif "heat_cool" in ac_modes:
+                            await self._call("set_hvac_mode", {"entity_id": cmd.entity_id, "hvac_mode": "heat_cool"})
+                            await self._call(
+                                "set_temperature",
+                                {"entity_id": cmd.entity_id, "temperature": ha_t},
+                                temp_intent="heat",
+                            )
+                        elif "auto" in ac_modes:
+                            await self._call("set_hvac_mode", {"entity_id": cmd.entity_id, "hvac_mode": "auto"})
+                            await self._call(
+                                "set_temperature",
+                                {"entity_id": cmd.entity_id, "temperature": ha_t},
+                                temp_intent="heat",
+                            )
+                        else:
+                            await self._call("set_hvac_mode", {"entity_id": cmd.entity_id, "hvac_mode": "off"})
+                else:
+                    # Inactive device
+                    if cmd.device_type == "thermostat":
+                        # Keep TRV in heat mode at low setpoint to avoid boiler short-cycling
+                        ha_t = celsius_to_ha_temp(self.hass, effective_target)
+                        await self._call("set_hvac_mode", {"entity_id": cmd.entity_id, "hvac_mode": "heat"})
+                        await self._call(
+                            "set_temperature",
+                            {"entity_id": cmd.entity_id, "temperature": ha_t},
+                            temp_intent="heat",
+                        )
+                    else:
+                        # ACs can be turned off without boiler cycling concerns
+                        await self._call("set_hvac_mode", {"entity_id": cmd.entity_id, "hvac_mode": "off"})
             return
 
         if mode == MODE_HEATING:

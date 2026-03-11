@@ -16,6 +16,7 @@ import "./rs-section-card";
 import "./rs-override-section";
 import "./rs-presence-section";
 import "./rs-covers-section";
+import "./rs-heat-source-section";
 import "../components/shared/rs-toggle-row";
 import { localize } from "../utils/localize";
 import { fireSaveStatus } from "../utils/events";
@@ -66,6 +67,10 @@ export class RsRoomDetail extends LitElement {
   @state() private _editingCovers = false;
   @state() private _isOutdoor = false;
   @state() private _valveProtectionExclude: Set<string> = new Set();
+  @state() private _heatSourceOrchestration = false;
+  @state() private _heatSourcePrimaryDelta = 1.5;
+  @state() private _heatSourceOutdoorThreshold = 5.0;
+  @state() private _heatSourceAcMinOutdoor = -15.0;
 
   private _prevAreaId: string | null = null;
   private _saveDebounce?: ReturnType<typeof setTimeout>;
@@ -219,6 +224,10 @@ export class RsRoomDetail extends LitElement {
       this._coversNightPosition = this.config.covers_night_position ?? 0;
       this._isOutdoor = this.config.is_outdoor ?? false;
       this._valveProtectionExclude = new Set(this.config.valve_protection_exclude ?? []);
+      this._heatSourceOrchestration = this.config.heat_source_orchestration ?? false;
+      this._heatSourcePrimaryDelta = this.config.heat_source_primary_delta ?? 1.5;
+      this._heatSourceOutdoorThreshold = this.config.heat_source_outdoor_threshold ?? 5.0;
+      this._heatSourceAcMinOutdoor = this.config.heat_source_ac_min_outdoor ?? -15.0;
     } else {
       this._selectedThermostats = new Set();
       this._selectedAcs = new Set();
@@ -248,6 +257,10 @@ export class RsRoomDetail extends LitElement {
       this._coversNightPosition = 0;
       this._isOutdoor = false;
       this._valveProtectionExclude = new Set();
+      this._heatSourceOrchestration = false;
+      this._heatSourcePrimaryDelta = 1.5;
+      this._heatSourceOutdoorThreshold = 5.0;
+      this._heatSourceAcMinOutdoor = -15.0;
     }
     this._dirty = false;
 
@@ -498,6 +511,24 @@ export class RsRoomDetail extends LitElement {
                 ></rs-covers-section>
               </rs-section-card>`
             : nothing}
+          ${!this._isOutdoor &&
+          this._selectedTempSensor &&
+          this._selectedThermostats.size > 0 &&
+          this._selectedAcs.size > 0
+            ? html`<rs-section-card
+                icon="mdi:swap-horizontal"
+                .heading=${localize("room.section.heat_source", this.hass.language)}
+              >
+                <rs-heat-source-section
+                  .hass=${this.hass}
+                  .enabled=${this._heatSourceOrchestration}
+                  .primaryDelta=${this._heatSourcePrimaryDelta}
+                  .outdoorThreshold=${this._heatSourceOutdoorThreshold}
+                  .acMinOutdoor=${this._heatSourceAcMinOutdoor}
+                  @setting-changed=${this._onHeatSourceSettingChanged}
+                ></rs-heat-source-section>
+              </rs-section-card>`
+            : nothing}
 
           <ha-card class="outdoor-toggle-card">
             <rs-toggle-row
@@ -724,6 +755,19 @@ export class RsRoomDetail extends LitElement {
     this._autoSave();
   }
 
+  // ---- Heat source orchestration ----
+
+  private _onHeatSourceSettingChanged(e: CustomEvent<{ key: string; value: unknown }>) {
+    const { key, value } = e.detail;
+    e.stopPropagation();
+    if (key === "heat_source_orchestration") this._heatSourceOrchestration = value as boolean;
+    else if (key === "heat_source_primary_delta") this._heatSourcePrimaryDelta = value as number;
+    else if (key === "heat_source_outdoor_threshold")
+      this._heatSourceOutdoorThreshold = value as number;
+    else if (key === "heat_source_ac_min_outdoor") this._heatSourceAcMinOutdoor = value as number;
+    this._autoSave();
+  }
+
   // ---- Outdoor toggle ----
 
   private _onOutdoorToggle(e: CustomEvent<boolean>) {
@@ -780,6 +824,10 @@ export class RsRoomDetail extends LitElement {
         covers_night_position: this._coversNightPosition,
         is_outdoor: this._isOutdoor,
         valve_protection_exclude: [...this._valveProtectionExclude],
+        heat_source_orchestration: this._heatSourceOrchestration,
+        heat_source_primary_delta: this._heatSourcePrimaryDelta,
+        heat_source_outdoor_threshold: this._heatSourceOutdoorThreshold,
+        heat_source_ac_min_outdoor: this._heatSourceAcMinOutdoor,
       });
 
       this._dirty = false;

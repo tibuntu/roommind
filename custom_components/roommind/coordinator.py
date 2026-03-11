@@ -45,6 +45,7 @@ from .control.solar import compute_q_solar_norm
 from .control.thermal_model import RoomModelManager
 from .managers.cover_orchestrator import CoverOrchestrator
 from .managers.ekf_training_manager import EkfTrainingManager
+from .managers.heat_source_orchestrator import HeatSourcePlan, evaluate_heat_sources
 from .managers.mold_manager import MoldManager
 from .managers.residual_heat_tracker import ResidualHeatTracker
 from .managers.valve_manager import ValveManager
@@ -108,6 +109,8 @@ class RoomMindCoordinator(DataUpdateCoordinator):
 
         self._cover_manager = CoverManager()
         self._cover_orchestrator = CoverOrchestrator(hass, self._cover_manager, self._model_manager)
+        # Heat source orchestration state (per room)
+        self._heat_source_states: dict[str, str] = {}
         # Track which rooms already have entity platform entities registered
         self._entity_areas: set[str] = set()
         # Min-run enforcement: timestamp when current non-idle mode started
@@ -516,6 +519,33 @@ class RoomMindCoordinator(DataUpdateCoordinator):
 
         # Exclude TRVs currently being valve-protection-cycled from normal control
         cycling_eids = {eid for eid in room.get("thermostats", []) if eid in self._valve_manager._cycling}
+
+        # Heat source orchestration: smart routing for rooms with both TRVs and ACs
+        heat_source_plan = None
+        if (
+            room.get("heat_source_orchestration", False)
+            and mode == MODE_HEATING
+            and has_external_sensor
+            and room.get("thermostats")
+            and room.get("acs")
+        ):
+            heat_source_plan = evaluate_heat_sources(
+                room_config=room,
+                mode=mode,
+                power_fraction=power_fraction,
+                current_temp=current_temp,
+                target_temp=targets.heat,
+                outdoor_temp=self.outdoor_temp,
+                previous_active_sources=self._heat_source_states.get(area_id, "none"),
+                hass=self.hass,
+            )
+            if heat_source_plan is not None:
+                self._heat_source_states[area_id] = heat_source_plan.active_sources
+        else:
+            # Orchestration not active for this room — remove stale state
+            # so re-enabling starts fresh.
+            self._heat_source_states.pop(area_id, None)
+
         if climate_active:
             try:
                 await controller.async_apply(
@@ -527,6 +557,7 @@ class RoomMindCoordinator(DataUpdateCoordinator):
                     heating_boost_target=device_max_temp,
                     ac_heating_boost_target=ac_device_max_temp,
                     cooling_boost_target=device_min_temp,
+                    heat_source_plan=heat_source_plan,
                 )
             except Exception:  # noqa: BLE001
                 _LOGGER.warning(
@@ -597,6 +628,12 @@ class RoomMindCoordinator(DataUpdateCoordinator):
                 # Full Control: controller's commanded mode is truth
                 ekf_mode: str | None = mode
                 ekf_pf = power_fraction
+                # When heat source orchestration is active, adjust ekf_pf to
+                # reflect the actual power delivered (not all devices may be
+                # heating).  Use the mean of per-device power_fractions so the
+                # EKF learns an accurate aggregated beta_h.
+                if heat_source_plan is not None and heat_source_plan.commands:
+                    ekf_pf = sum(c.power_fraction for c in heat_source_plan.commands) / len(heat_source_plan.commands)
             else:
                 # Managed Mode: device self-regulates, use observed/inferred
                 # state to avoid training "always heating" (#69).
@@ -673,7 +710,15 @@ class RoomMindCoordinator(DataUpdateCoordinator):
             "cool_target": targets.cool,
             "mode": display_mode,
             "heating_power": round(display_pf * 100) if display_mode != MODE_IDLE else 0,
-            "device_setpoint": self._compute_device_setpoint(
+            "device_setpoint": self._compute_device_setpoint_orchestrated(
+                heat_source_plan,
+                current_temp,
+                target_temp,
+                device_max_temp,
+                ac_device_max_temp,
+            )
+            if heat_source_plan is not None
+            else self._compute_device_setpoint(
                 mode,
                 power_fraction,
                 current_temp,
@@ -701,7 +746,34 @@ class RoomMindCoordinator(DataUpdateCoordinator):
             "cover_auto_paused": (self._cover_orchestrator.is_user_override_active(area_id) if cover_eids else False),
             "cover_forced_reason": (cover_result.forced_reason if cover_eids else ""),
             "active_cover_schedule_index": (cover_result.active_cover_schedule_index if cover_eids else -1),
+            "active_heat_sources": self._heat_source_states.get(area_id),
         }
+
+    @staticmethod
+    def _compute_device_setpoint_orchestrated(
+        heat_source_plan: HeatSourcePlan,
+        current_temp: float | None,
+        target_temp: float | None,
+        device_max_temp: float | None,
+        ac_device_max_temp: float | None,
+    ) -> float | None:
+        """Compute device setpoint from the orchestrated heat source plan."""
+        if current_temp is None or target_temp is None:
+            return None
+        # Find the most representative active command
+        active_cmds = [c for c in heat_source_plan.commands if c.active]
+        if not active_cmds:
+            return None
+        # Pick the first active command (primary preferred, then secondary)
+        cmd = active_cmds[0]
+        if cmd.device_type == "thermostat":
+            boost = device_max_temp if device_max_temp is not None else HEATING_BOOST_TARGET
+        else:
+            boost = ac_device_max_temp if ac_device_max_temp is not None else AC_HEATING_BOOST_TARGET
+        sp = round(current_temp + cmd.power_fraction * (boost - current_temp), 1)
+        sp = max(target_temp, sp)
+        sp = min(boost, sp)
+        return sp
 
     @staticmethod
     def _compute_device_setpoint(
@@ -1044,6 +1116,7 @@ class RoomMindCoordinator(DataUpdateCoordinator):
         self._binary_sensor_entity_areas.discard(area_id)
         self._climate_entity_areas.discard(area_id)
         self._model_manager.remove_room(area_id)
+        self._heat_source_states.pop(area_id, None)
         if self._history_store:
             await self.hass.async_add_executor_job(self._history_store.remove_room, area_id)
 

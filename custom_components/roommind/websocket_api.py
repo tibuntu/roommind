@@ -73,6 +73,10 @@ _ROOM_SAVE_FIELDS = (
     "covers_night_close",
     "covers_night_position",
     "is_outdoor",
+    "heat_source_orchestration",
+    "heat_source_primary_delta",
+    "heat_source_outdoor_threshold",
+    "heat_source_ac_min_outdoor",
 )
 
 _SETTINGS_SAVE_FIELDS = (
@@ -177,6 +181,7 @@ async def websocket_list_rooms(
             "cover_auto_paused": live.get("cover_auto_paused", False),
             "cover_forced_reason": live.get("cover_forced_reason", ""),
             "active_cover_schedule_index": live.get("active_cover_schedule_index", -1),
+            "active_heat_sources": live.get("active_heat_sources"),
         }
         result[area_id] = room_data
 
@@ -253,6 +258,10 @@ async def websocket_list_rooms(
         vol.Optional("covers_night_position"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
         vol.Optional("is_outdoor"): bool,
         vol.Optional("valve_protection_exclude"): [str],
+        vol.Optional("heat_source_orchestration"): bool,
+        vol.Optional("heat_source_primary_delta"): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=5.0)),
+        vol.Optional("heat_source_outdoor_threshold"): vol.All(vol.Coerce(float), vol.Range(min=-20, max=25)),
+        vol.Optional("heat_source_ac_min_outdoor"): vol.All(vol.Coerce(float), vol.Range(min=-30, max=5)),
     }
 )
 @websocket_api.async_response
