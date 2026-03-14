@@ -170,6 +170,10 @@
   "devices.system_type_underfloor": "Fußbodenheizung",
   "devices.underfloor_delay_hint": "Fußbodenheizung hat lange Anlaufzeiten. Eine Fenster-Verzögerung von mindestens 5 Minuten wird empfohlen, um unnötige Abschaltungen zu vermeiden.",
   "devices.heating_system_type_boost_hint": "Tipp: Wenn sich die Heizungsart geändert hat, kannst du unter Einstellungen das Lernen beschleunigen.",
+  "devices.idle_action": "Im Leerlauf",
+  "devices.idle_action_off": "Ausschalten",
+  "devices.idle_action_fan_only": "Nur Ventilator",
+  "devices.idle_fan_mode": "Lüftergeschwindigkeit",
   "devices.valve_protection_excluded": "Vom Ventilschutz ausgenommen",
   "devices.valve_protection_exclude_hint": "Dieses Gerät wird nicht vom Ventilschutz bewegt (z.B. virtuelle Kessel-Entitäten)",
 

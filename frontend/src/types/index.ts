@@ -59,6 +59,8 @@ export interface DeviceConfig {
   type: DeviceType;
   role: DeviceRole;
   heating_system_type?: string;
+  idle_action?: "off" | "fan_only"; // default "off"
+  idle_fan_mode?: string; // default "low"
 }
 
 export interface CompressorGroup {
