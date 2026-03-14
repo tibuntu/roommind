@@ -4,6 +4,8 @@
 
 set -e
 
+WORKSPACE="/workspaces/roommind"
+
 echo "Setting up RoomMind development environment..."
 
 # ---------------------------------------------------------------------------
@@ -52,8 +54,13 @@ sudo apt-get install -y \
 echo "Installing Python dependencies..."
 pip install --upgrade pip setuptools wheel
 
-echo "Installing Home Assistant (with all optional deps)..."
-pip install 'homeassistant[all]'
+echo "Installing Home Assistant..."
+pip install homeassistant
+
+# HA core imports pull in modules not declared in the base package.
+# Install them explicitly so built-in integrations load cleanly.
+echo "Installing HA runtime extras..."
+pip install hassil mutagen
 
 echo "Installing development & test dependencies..."
 pip install \
@@ -65,11 +72,12 @@ pip install \
     mypy \
     pre-commit
 
+# Performance libraries to suppress HA warnings
+pip install zlib-ng isal
+
 # ---------------------------------------------------------------------------
 # Frontend dependencies
 # ---------------------------------------------------------------------------
-WORKSPACE="/workspaces/roommind"
-
 echo "Installing frontend dependencies..."
 cd "${WORKSPACE}/frontend"
 npm ci
