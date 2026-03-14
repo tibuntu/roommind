@@ -20,6 +20,11 @@ VALID_HEATING_SYSTEM_TYPES = {"", "radiator", "underfloor"}
 # Heating system type priority: higher = longer residual heat tau
 HST_PRIORITY = {"underfloor": 2, "radiator": 1, "": 0}
 
+IDLE_ACTION_OFF = "off"
+IDLE_ACTION_FAN_ONLY = "fan_only"
+VALID_IDLE_ACTIONS = {IDLE_ACTION_OFF, IDLE_ACTION_FAN_ONLY}
+DEFAULT_IDLE_FAN_MODE = "low"
+
 
 def legacy_to_devices(
     thermostats: list[str],
@@ -39,6 +44,8 @@ def legacy_to_devices(
                 "type": DEVICE_TYPE_TRV,
                 "role": DEVICE_ROLE_AUTO,
                 "heating_system_type": heating_system_type,
+                "idle_action": IDLE_ACTION_OFF,
+                "idle_fan_mode": "",
             }
         )
     for eid in acs:
@@ -48,6 +55,8 @@ def legacy_to_devices(
                 "type": DEVICE_TYPE_AC,
                 "role": DEVICE_ROLE_AUTO,
                 "heating_system_type": "",
+                "idle_action": IDLE_ACTION_OFF,
+                "idle_fan_mode": "",
             }
         )
     return devices
@@ -177,6 +186,17 @@ def is_trv_type(device: dict) -> bool:
 def is_ac_type(device: dict) -> bool:
     """True if device type is AC."""
     return device.get("type") == DEVICE_TYPE_AC
+
+
+def get_idle_action(devices: list[dict], entity_id: str) -> tuple[str, str]:
+    """Return (idle_action, idle_fan_mode) for a device."""
+    dev = get_device_by_eid(devices, entity_id)
+    if dev is None:
+        return (IDLE_ACTION_OFF, DEFAULT_IDLE_FAN_MODE)
+    return (
+        dev.get("idle_action", IDLE_ACTION_OFF),
+        dev.get("idle_fan_mode", DEFAULT_IDLE_FAN_MODE),
+    )
 
 
 def migrate_heat_pump_devices(devices: list[dict]) -> bool:
