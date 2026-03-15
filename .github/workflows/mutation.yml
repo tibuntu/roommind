@@ -35,7 +35,7 @@ jobs:
             mutmut-
 
       - name: Run mutation testing
-        run: mutmut run --no-progress --CI
+        run: mutmut run
         timeout-minutes: 120
 
       - name: Generate report
