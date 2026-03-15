@@ -135,7 +135,7 @@ def test_current_temperature_none_when_no_data(mock_coordinator):
 def test_current_temperature_none_when_room_not_in_data(mock_coordinator):
     """current_temperature returns None when room not in coordinator data."""
     coordinator, store = mock_coordinator
-    coordinator.data = {"other_room": {"current_temp": 20.0}}
+    coordinator.data = {"rooms": {"other_room": {"current_temp": 20.0}}}
     entity = RoomMindOverrideClimate(coordinator, "living_room")
     assert entity.current_temperature is None
 

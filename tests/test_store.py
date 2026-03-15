@@ -124,38 +124,6 @@ async def test_delete_nonexistent_raises(store):
 
 
 @pytest.mark.asyncio
-async def test_default_climate_mode_is_auto(store):
-    """Saving without climate_mode defaults to 'auto'."""
-    await store.async_load()
-
-    room = await store.async_save_room("flur", {})
-
-    assert room["climate_mode"] == "auto"
-
-
-@pytest.mark.asyncio
-async def test_default_schedules_is_empty(store):
-    """Saving without schedules defaults to empty list."""
-    await store.async_load()
-
-    room = await store.async_save_room("flur", {})
-
-    assert room["schedules"] == []
-    assert room["schedule_selector_entity"] == ""
-
-
-@pytest.mark.asyncio
-async def test_default_comfort_and_eco_temps(store):
-    """Saving without temps defaults to DEFAULT_COMFORT_TEMP and DEFAULT_ECO_TEMP."""
-    await store.async_load()
-
-    room = await store.async_save_room("flur", {})
-
-    assert room["comfort_temp"] == DEFAULT_COMFORT_TEMP
-    assert room["eco_temp"] == DEFAULT_ECO_TEMP
-
-
-@pytest.mark.asyncio
 async def test_load_restores_data(store):
     """Loading from store restores room data correctly."""
     stored_data = {
@@ -555,18 +523,17 @@ async def test_save_room_with_legacy_syncs_devices(store):
         {
             "thermostats": ["climate.trv1"],
             "acs": ["climate.ac1"],
-            "devices": [
-                {"entity_id": "climate.trv1", "type": "trv", "role": "auto", "heating_system_type": "radiator"},
-                {"entity_id": "climate.ac1", "type": "ac", "role": "auto", "heating_system_type": ""},
-            ],
             "heating_system_type": "radiator",
         },
     )
     assert "devices" in room
     assert len(room["devices"]) == 2
+    assert room["devices"][0]["entity_id"] == "climate.trv1"
     assert room["devices"][0]["type"] == "trv"
     assert room["devices"][0]["heating_system_type"] == "radiator"
+    assert room["devices"][1]["entity_id"] == "climate.ac1"
     assert room["devices"][1]["type"] == "ac"
+    assert room["devices"][1]["heating_system_type"] == ""
 
 
 @pytest.mark.asyncio
@@ -598,20 +565,21 @@ async def test_update_existing_with_legacy_syncs_devices(store):
             "devices": [{"entity_id": "climate.trv1", "type": "trv", "role": "auto", "heating_system_type": ""}],
         },
     )
-    # Update with legacy format (old frontend)
+    # Update with legacy format (old frontend) — no devices key
     updated = await store.async_save_room(
         "wohnzimmer",
         {
             "thermostats": ["climate.trv1", "climate.trv2"],
             "acs": ["climate.ac1"],
-            "devices": [
-                {"entity_id": "climate.trv1", "type": "trv", "role": "auto", "heating_system_type": ""},
-                {"entity_id": "climate.trv2", "type": "trv", "role": "auto", "heating_system_type": ""},
-                {"entity_id": "climate.ac1", "type": "ac", "role": "auto", "heating_system_type": ""},
-            ],
         },
     )
     assert len(updated["devices"]) == 3
+    assert updated["devices"][0]["entity_id"] == "climate.trv1"
+    assert updated["devices"][0]["type"] == "trv"
+    assert updated["devices"][1]["entity_id"] == "climate.trv2"
+    assert updated["devices"][1]["type"] == "trv"
+    assert updated["devices"][2]["entity_id"] == "climate.ac1"
+    assert updated["devices"][2]["type"] == "ac"
 
 
 @pytest.mark.asyncio

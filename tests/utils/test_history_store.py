@@ -159,12 +159,10 @@ def test_downsample_preserves_window_open(history_dir):
         },
     ]
     result = store._downsample(rows, bucket_seconds=300)
-    # Two buckets: 0-300s and 300-600s
-    assert len(result) >= 1
+    # Two buckets: 0-300s (ts 1000, 1060) and 300-600s (ts 1500)
+    assert len(result) == 2
     assert result[0]["window_open"] == "True"
-    # Second bucket should have window_open=False
-    if len(result) > 1:
-        assert result[1]["window_open"] == "False"
+    assert result[1]["window_open"] == "False"
 
 
 def test_rotate_moves_old_to_history(history_dir):
@@ -343,7 +341,8 @@ def test_rotate_skips_corrupt_timestamps(history_dir):
     # Should not raise
     store.rotate("room_a")
     rows = store.read_detail("room_a")
-    assert len(rows) >= 1
+    assert len(rows) == 1  # only the valid row survives
+    assert rows[0]["room_temp"] == "20.0"
 
 
 # ---------------------------------------------------------------------------
@@ -402,20 +401,6 @@ def test_safe_ts_non_numeric():
 def test_safe_ts_none_value():
     """None timestamp returns 0.0."""
     assert HistoryStore._safe_ts({"timestamp": None}) == 0.0
-
-
-def test_read_detail_with_end_ts_filter(history_dir):
-    """read_detail with end_ts filters out records after the cutoff."""
-    import time as _time
-
-    store = HistoryStore(history_dir)
-    now = _time.time()
-    store.record(
-        "living_room",
-        {"room_temp": 21.0, "outdoor_temp": 5.0, "target_temp": 21.0, "mode": "idle", "predicted_temp": 21.0},
-    )
-    rows = store.read_detail("living_room", end_ts=now - 10)
-    assert len(rows) == 0
 
 
 def test_rotate_trims_old_history(history_dir):

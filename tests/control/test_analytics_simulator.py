@@ -259,7 +259,7 @@ class TestSimulateMPC:
             "climate_mode": "auto",
         }
         settings = {"comfort_weight": 70}
-        result = _simulate_mpc(
+        result_with_solar = _simulate_mpc(
             model,
             target_forecast,
             outdoor_series,
@@ -268,7 +268,17 @@ class TestSimulateMPC:
             settings=settings,
             solar_series=solar_series,
         )
-        assert len(result) == 5
+        result_no_solar = _simulate_mpc(
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
+            settings=settings,
+        )
+        assert len(result_with_solar) == 5
+        # Solar gain should produce higher temperatures
+        assert result_with_solar[-1] > result_no_solar[-1]
 
     def test_temperatures_clamped(self):
         """Output temps are clamped between 5 and 40."""
@@ -360,17 +370,21 @@ class TestSimulateBangbang:
             "climate_mode": "auto",
         }
         all_points: list[dict] = []
-        # Start well below target to trigger heating
+        # Start below target - hysteresis (20.8 - 0.2 = below triggers heating)
         result = _simulate_bangbang(
             model,
             target_forecast,
             outdoor_series,
-            current_temp=20.0,
+            current_temp=18.0,
             room_config=room_config,
             all_points=all_points,
         )
-        # With very high Q_heat, temp jumps quickly, but min run enforces at least 2 blocks
         assert len(result) == 5
+        # With very high Q_heat (5000), temp exceeds target after 1 block, but
+        # min_run=2 forces at least 2 consecutive heating blocks. Verify first
+        # two blocks both show temperature increases (heating active).
+        assert result[0] > 18.0, "Block 1 should heat"
+        assert result[1] > result[0], "Block 2 should still heat (min_run stickiness)"
 
     def test_cooling_scenario(self):
         """Hot room with ACs → temperature should decrease."""
@@ -608,6 +622,10 @@ class TestSimulateBangbang:
         )
         assert len(result_with_residual) == 10
         assert len(result_no_residual) == 10
+        # Residual heat should produce higher temperatures at some point
+        assert any(r > n for r, n in zip(result_with_residual, result_no_residual, strict=True)), (
+            "Residual heat should raise temperatures compared to no residual"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -637,6 +655,9 @@ class TestSimulatePrediction:
             all_points=[],
         )
         assert len(result) == 5
+        assert all(-10 < t < 60 for t in result)
+        # Window open with cold outdoor: temps should drift toward outdoor_temp (5.0)
+        assert result[-1] < 20.0
 
     def test_mpc_active_dispatches_to_mpc_sim(self):
         """mpc_active=True, window_open=False → _simulate_mpc path."""
@@ -663,6 +684,9 @@ class TestSimulatePrediction:
             all_points=[],
         )
         assert len(result) == 5
+        assert all(-10 < t < 60 for t in result)
+        # Heating scenario: temps should be >= initial temp
+        assert result[-1] >= 18.0
 
     def test_fallback_dispatches_to_bangbang(self):
         """Neither window_open nor mpc_active → bangbang path."""
@@ -689,6 +713,9 @@ class TestSimulatePrediction:
             all_points=[],
         )
         assert len(result) == 5
+        assert all(-10 < t < 60 for t in result)
+        # Heating scenario (bangbang): temps should be >= initial temp
+        assert result[-1] >= 18.0
 
 
 # ---------------------------------------------------------------------------
@@ -770,7 +797,7 @@ class TestSimulateMPCEdgeCases:
             "devices": [{"entity_id": "climate.trv", "type": "trv", "role": "auto", "heating_system_type": ""}],
             "climate_mode": "auto",
         }
-        # With underfloor min_run, heating continues even if temp exceeds target
+        # With underfloor min_run=6 blocks, heating continues even if temp exceeds target
         result = _simulate_mpc(
             model,
             target_forecast,
@@ -781,6 +808,20 @@ class TestSimulateMPCEdgeCases:
             heating_system_type="underfloor",
         )
         assert len(result) == 10
+        # With Q_heat=5000, temp exceeds target (21) after block 1, but
+        # underfloor min_run=6 forces continued heating. Verify at least 6
+        # consecutive temperature increases from the start.
+        consecutive_increases = 0
+        prev = 15.0
+        for t in result:
+            if t > prev:
+                consecutive_increases += 1
+            else:
+                break
+            prev = t
+        assert consecutive_increases >= 6, (
+            f"Expected >= 6 consecutive heating blocks (underfloor min_run), got {consecutive_increases}"
+        )
 
     def test_cooling_action_applies_negative_q(self):
         """Cooling action → Q = -(pf * Q_cool) (line 249)."""
@@ -816,7 +857,7 @@ class TestSimulateMPCEdgeCases:
             "devices": [{"entity_id": "climate.trv", "type": "trv", "role": "auto", "heating_system_type": ""}],
             "climate_mode": "auto",
         }
-        result = _simulate_mpc(
+        result_with_residual = _simulate_mpc(
             model,
             target_forecast,
             outdoor_series,
@@ -828,7 +869,20 @@ class TestSimulateMPCEdgeCases:
             heating_duration_minutes=60.0,
             last_power_fraction=1.0,
         )
-        assert len(result) == 10
+        result_no_residual = _simulate_mpc(
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=20.0,
+            room_config=room_config,
+            settings={},
+        )
+        assert len(result_with_residual) == 10
+        assert len(result_no_residual) == 10
+        # Residual heat should produce higher temperatures at some point
+        assert any(r > n for r, n in zip(result_with_residual, result_no_residual, strict=True)), (
+            "Residual heat should raise temperatures compared to no residual"
+        )
 
     def test_residual_series_built_when_active(self):
         """Residual series is built for optimizer when q_residual > 0 (line 229)."""
@@ -842,7 +896,7 @@ class TestSimulateMPCEdgeCases:
             "climate_mode": "auto",
         }
         # Start at target to force optimizer path (not stickiness)
-        result = _simulate_mpc(
+        result_with_residual = _simulate_mpc(
             model,
             target_forecast,
             outdoor_series,
@@ -854,4 +908,17 @@ class TestSimulateMPCEdgeCases:
             heating_duration_minutes=30.0,
             last_power_fraction=0.8,
         )
-        assert len(result) == 5
+        result_no_residual = _simulate_mpc(
+            model,
+            target_forecast,
+            outdoor_series,
+            current_temp=21.0,
+            room_config=room_config,
+            settings={},
+        )
+        assert len(result_with_residual) == 5
+        assert len(result_no_residual) == 5
+        # Residual heat should affect output (higher temps at some point)
+        assert any(r > n for r, n in zip(result_with_residual, result_no_residual, strict=True)), (
+            "Residual series should raise temperatures compared to no residual"
+        )
