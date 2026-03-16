@@ -80,6 +80,7 @@ _ROOM_SAVE_FIELDS = (
     "heat_source_primary_delta",
     "heat_source_outdoor_threshold",
     "heat_source_ac_min_outdoor",
+    "valve_protection_exclude",
 )
 
 _SETTINGS_SAVE_FIELDS = (
