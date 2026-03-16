@@ -32,6 +32,7 @@ from ..utils.device_utils import (
     get_ac_eids,
     get_idle_action,
     get_trv_eids,
+    has_reliable_hvac_modes,
 )
 from ..utils.temp_utils import celsius_to_ha_temp
 from .mpc_optimizer import MPCOptimizer, MPCPlan
@@ -357,6 +358,28 @@ def resolve_hvac_mode(desired: str, hvac_modes: list[str]) -> str | None:
     return None
 
 
+# Assumed full mode set for devices whose hvac_modes attribute is unreliable.
+# Deliberately excludes "heat_cool" so the cascade falls through to separate
+# "heat"/"cool" branches which work for more device types.
+_ASSUMED_FULL_MODES: list[str] = ["off", "heat", "cool", "fan_only"]
+
+
+def _effective_ac_modes(state: Any) -> list[str]:
+    """Return hvac_modes, assuming full capability when modes appear unreliable.
+
+    When a device is off and reports no active modes (heat/cool/heat_cool/auto),
+    the integration likely hides modes while off or is misconfigured.  Return a
+    generous assumed set so the command cascade picks the right mode.  The actual
+    service call may still fail — the caller's try/except handles that safely.
+    """
+    if state is None:
+        return []
+    modes = state.attributes.get("hvac_modes") or []
+    if has_reliable_hvac_modes(state):
+        return modes
+    return _ASSUMED_FULL_MODES
+
+
 # Maximum prediction uncertainty (degC) for MPC to be used.
 # Physical meaning: "use MPC when the 5-min prediction is accurate to ±0.5°C."
 MPC_MAX_PREDICTION_STD = 0.5
@@ -380,7 +403,7 @@ def check_acs_can_heat(hass: HomeAssistant, room_config: dict) -> bool:
         state = hass.states.get(eid)
         if state is None:
             continue
-        modes = state.attributes.get("hvac_modes", [])
+        modes = _effective_ac_modes(state)
         if "heat" in modes or "heat_cool" in modes or "auto" in modes:
             return True
     return False
@@ -912,7 +935,7 @@ class MPCController:
                     await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id, targets=targets)
                     continue
                 ac_state = self.hass.states.get(eid)
-                ac_modes = (ac_state.attributes.get("hvac_modes") or []) if ac_state else []
+                ac_modes = _effective_ac_modes(ac_state)
                 ac_target = ha_cool_target if ha_cool_target is not None else ha_heat_target
                 if ac_target is None:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "off"})
@@ -990,7 +1013,7 @@ class MPCController:
                             )
                         else:
                             ac_state = self.hass.states.get(cmd.entity_id)
-                            ac_modes = (ac_state.attributes.get("hvac_modes") or []) if ac_state else []
+                            ac_modes = _effective_ac_modes(ac_state)
                             if "heat" in ac_modes:
                                 await self._call(
                                     "set_hvac_mode",
@@ -1049,7 +1072,7 @@ class MPCController:
                             t = effective_target
                         ha_t = celsius_to_ha_temp(self.hass, t)
                         ac_state = self.hass.states.get(cmd.entity_id)
-                        ac_modes = (ac_state.attributes.get("hvac_modes") or []) if ac_state else []
+                        ac_modes = _effective_ac_modes(ac_state)
                         if "heat" in ac_modes:
                             await self._call("set_hvac_mode", {"entity_id": cmd.entity_id, "hvac_mode": "heat"})
                             await self._call(
@@ -1129,7 +1152,7 @@ class MPCController:
                     await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id, targets=targets)
                     continue
                 ac_state = self.hass.states.get(eid)
-                ac_modes = (ac_state.attributes.get("hvac_modes") or []) if ac_state else []
+                ac_modes = _effective_ac_modes(ac_state)
                 if "heat" in ac_modes:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "heat"})
                     await self._call(
@@ -1227,13 +1250,25 @@ class MPCController:
             hvac_modes = state.attributes.get("hvac_modes") or []
             resolved = resolve_hvac_mode(data["hvac_mode"], hvac_modes)
             if resolved is None:
-                _LOGGER.debug(
-                    "Area '%s': device '%s' does not support '%s' or any fallback, skipping",
-                    self._area_id,
-                    eid,
-                    data["hvac_mode"],
-                )
-                return
+                if not has_reliable_hvac_modes(state):
+                    # Modes unreliable (device off with incomplete modes).
+                    # Send the desired mode directly; turning the device on
+                    # should reveal the full mode list.
+                    resolved = data["hvac_mode"]
+                    _LOGGER.debug(
+                        "Area '%s': device '%s' off with incomplete modes, sending '%s' directly",
+                        self._area_id,
+                        eid,
+                        resolved,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "Area '%s': device '%s' does not support '%s' or any fallback, skipping",
+                        self._area_id,
+                        eid,
+                        data["hvac_mode"],
+                    )
+                    return
             if resolved != data["hvac_mode"]:
                 _LOGGER.debug(
                     "Area '%s': device '%s' resolved '%s' -> '%s'",
