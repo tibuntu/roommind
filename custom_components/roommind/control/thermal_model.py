@@ -665,9 +665,11 @@ class ThermalEKF:
         # to reduce it again just degrades confidence and destabilises the
         # correlated parameters (alpha ↔ beta_h coupling → time-constant
         # oscillation).
+        alpha_ratio = max(alpha, self._ALPHA_MIN) / self._DEFAULT_ALPHA
+        q_alpha = self._Q_ALPHA * min(1.0, alpha_ratio * alpha_ratio)
         Q = [
             self._Q_T,
-            self._Q_ALPHA,
+            q_alpha,
             self._Q_BETA_H if (mode == "heating" or (mode == "idle" and q_residual > 0)) else 0.0,
             self._Q_BETA_C if mode == "cooling" else 0.0,
             self._Q_BETA_S if q_solar > 0 else 0.0,
