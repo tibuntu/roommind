@@ -225,6 +225,23 @@ export class RsDeviceSection extends LitElement {
       min-width: 0;
     }
 
+    .setpoint-mode-row {
+      display: flex;
+      gap: 12px;
+      padding: 4px 14px 4px 42px;
+    }
+
+    .setpoint-mode-row ha-select {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .setpoint-mode-hint {
+      font-size: 12px;
+      color: var(--secondary-text-color);
+      margin-top: 2px;
+    }
+
     .valve-exclude-row {
       display: flex;
       align-items: center;
@@ -442,6 +459,7 @@ export class RsDeviceSection extends LitElement {
     const device =
       type === "climate" ? this.devices.find((d) => d.entity_id === entityId) : undefined;
     const showIdleBadge = device?.idle_action === "fan_only" || device?.idle_action === "setback";
+    const showDirectBadge = device?.setpoint_mode === "direct" && !!this.selectedTempSensor;
 
     return html`
       <div class="view-row">
@@ -456,6 +474,11 @@ export class RsDeviceSection extends LitElement {
                     ? ` (${device!.idle_fan_mode})`
                     : nothing}`
                 : localize("devices.idle_action_setback", this.hass.language)}
+            </span>`
+          : nothing}
+        ${showDirectBadge
+          ? html`<span class="valve-exclude-badge">
+              ${localize("devices.setpoint_mode_direct", this.hass.language)}
             </span>`
           : nothing}
         ${showExcludeBadge
@@ -857,6 +880,41 @@ export class RsDeviceSection extends LitElement {
           </div>
         `;
       })()}
+      ${(() => {
+        const device = this.devices.find((d) => d.entity_id === entityId);
+        if (!isSelected || !this.selectedTempSensor) return nothing;
+        return html`
+          <div class="setpoint-mode-row">
+            <ha-select
+              .label=${localize("devices.setpoint_mode", this.hass.language)}
+              .value=${device?.setpoint_mode ?? "proportional"}
+              .options=${[
+                {
+                  value: "proportional",
+                  label: localize("devices.setpoint_mode_proportional", this.hass.language),
+                },
+                {
+                  value: "direct",
+                  label: localize("devices.setpoint_mode_direct", this.hass.language),
+                },
+              ]}
+              @selected=${(e: Event) => this._onSetpointModeChange(entityId, getSelectValue(e)!)}
+              @closed=${(e: Event) => e.stopPropagation()}
+              fixedMenuPosition
+            >
+              <ha-list-item value="proportional"
+                >${localize("devices.setpoint_mode_proportional", this.hass.language)}</ha-list-item
+              >
+              <ha-list-item value="direct"
+                >${localize("devices.setpoint_mode_direct", this.hass.language)}</ha-list-item
+              >
+            </ha-select>
+            <div class="setpoint-mode-hint">
+              ${localize("devices.setpoint_mode_hint", this.hass.language)}
+            </div>
+          </div>
+        `;
+      })()}
       ${isThermostat && this.valveProtectionEnabled
         ? html`
             <div
@@ -1055,6 +1113,13 @@ export class RsDeviceSection extends LitElement {
   private _onIdleFanModeChange(entityId: string, fanMode: string): void {
     const newDevices = this.devices.map((d) =>
       d.entity_id === entityId ? { ...d, idle_fan_mode: fanMode } : d,
+    );
+    this._fireDeviceChanged(newDevices);
+  }
+
+  private _onSetpointModeChange(entityId: string, mode: string): void {
+    const newDevices = this.devices.map((d) =>
+      d.entity_id === entityId ? { ...d, setpoint_mode: mode as "proportional" | "direct" } : d,
     );
     this._fireDeviceChanged(newDevices);
   }

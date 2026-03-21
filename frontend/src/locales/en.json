@@ -177,6 +177,10 @@
   "devices.idle_action_fan_only": "Fan only",
   "devices.idle_action_setback": "Setback",
   "devices.idle_fan_mode": "Fan speed",
+  "devices.setpoint_mode": "Setpoint mode",
+  "devices.setpoint_mode_proportional": "Proportional (valve control)",
+  "devices.setpoint_mode_direct": "Direct (device regulates)",
+  "devices.setpoint_mode_hint": "Use Direct for space heaters or pellet stoves with their own thermostat. Proportional is best for radiator valves (TRVs).",
   "devices.valve_protection_excluded": "Excluded from valve protection",
   "devices.valve_protection_exclude_hint": "This entity will not be cycled by valve protection (e.g. virtual boiler entities)",
 
