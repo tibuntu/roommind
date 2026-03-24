@@ -221,6 +221,7 @@ custom_components/roommind/frontend/roommind-panel.js
 .mcp.json
 CLAUDE.md
 ROADMAP.md
+docs/improvements.md
 
 # Worktrees
 .worktrees/
