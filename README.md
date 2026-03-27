@@ -1,8 +1,8 @@
 # RoomMind
 
-[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![HACS Default](https://img.shields.io/badge/HACS-Default-orange.svg)](https://github.com/hacs/integration)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.2%2B-blue.svg)](https://www.home-assistant.io/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License](https://img.shields.io/github/license/snazzybean/roommind)](https://github.com/snazzybean/roommind/blob/main/LICENSE)
 [![Tests](https://github.com/snazzybean/roommind/actions/workflows/ci.yml/badge.svg)](https://github.com/snazzybean/roommind/actions/workflows/ci.yml)
 ![Coverage](https://raw.githubusercontent.com/snazzybean/roommind/python-coverage-comment-action-data/badge.svg)
 [![GitHub Release](https://img.shields.io/github/v/release/snazzybean/roommind)](https://github.com/snazzybean/roommind/releases/latest)
@@ -45,11 +45,9 @@
 ### HACS (Recommended)
 
 1. Open HACS in Home Assistant
-2. Click the three-dot menu > **Custom repositories**
-3. Add `https://github.com/snazzybean/roommind` as an **Integration**
-4. Search for "RoomMind" and install
-5. Restart Home Assistant
-6. Go to **Settings > Devices & Services > Add Integration > RoomMind**
+2. Search for "RoomMind" and install
+3. Restart Home Assistant
+4. Go to **Settings > Devices & Services > Add Integration > RoomMind**
 
 ### Manual
 
@@ -133,7 +131,3 @@ These can be used in HA automations, dashboards, or other integrations.
 - Optional: temperature sensor, humidity sensor, window sensors, weather entity, schedule helpers, person entities
 
 No cloud services required - everything runs locally.
-
-## License
-
-[MIT](LICENSE) - Copyright (c) 2026 SnazzyBean
