@@ -4,9 +4,10 @@ import time
 from typing import NamedTuple
 
 from homeassistant.const import Platform
+from homeassistant.core import Context
 
 DOMAIN = "roommind"
-VERSION = "1.5.0-beta.1"
+VERSION = "1.6.1-beta.1"
 
 # Platforms
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH, Platform.BINARY_SENSOR, Platform.CLIMATE]
@@ -42,6 +43,16 @@ DEFAULT_ECO_HEAT = 17.0
 DEFAULT_ECO_COOL = 27.0
 
 
+# Context identifier for RoomMind-initiated service calls.
+# Automations can check: trigger.context.parent_id == "roommind"
+ROOMMIND_CONTEXT_ID = "roommind"
+
+
+def make_roommind_context() -> Context:
+    """Create a HA Context tagged as originating from RoomMind."""
+    return Context(parent_id=ROOMMIND_CONTEXT_ID)
+
+
 class TargetTemps(NamedTuple):
     """Dual-target temperatures for heating and cooling."""
 
@@ -61,6 +72,10 @@ MIN_POWER_FRACTION = 0.15  # Minimum non-zero power fraction (prevents TRV dead 
 
 # Update interval in seconds
 UPDATE_INTERVAL = 30
+
+# Sensor dropout: keep using cached temperature for this many seconds
+# before falling back to idle (~10 coordinator cycles at 30s).
+MAX_SENSOR_STALENESS = 300
 
 # Coordinator throttle intervals (in cycles of UPDATE_INTERVAL)
 HISTORY_WRITE_CYCLES = 6  # ~3 min at 30s cycle
@@ -116,7 +131,7 @@ RESIDUAL_HEAT_CUTOFF = 0.02  # below this q_residual is treated as zero
 COVER_SOLAR_MIN: float = 0.15
 COVER_HYSTERESIS: float = 1.0
 COVER_MIN_HOLD_SECONDS: int = 900
-COVER_POS_SCALE: float = 25.0
+COVER_POS_SCALE: float = 50.0
 COVER_MAX_EFFECTIVENESS: float = 0.85
 COVER_USER_CONFLICT_THRESHOLD: int = 15
 COVER_USER_OVERRIDE_MINUTES: int = 60
@@ -127,7 +142,7 @@ COVER_PREDICTION_DT_MINUTES: float = 5.0  # time step for RC trajectory simulati
 COVER_MAX_PREDICTION_STD: float = 0.5  # max idle+solar prediction_std to activate RC tier
 COVER_CONFIDENCE_REFERENCE_SOLAR: float = 0.5  # reference q_solar for confidence check
 COVER_MIN_IDLE_FOR_LEARNED: int = 30  # Min idle observations before trusting EKF's beta_s
-COVER_POS_DEADBAND: int = 5  # min position change (%) to trigger motor movement
+COVER_POS_DEADBAND: int = 10  # min position change (%) to trigger motor movement
 
 # Heat source orchestration — smart routing for rooms with multiple heating device types
 DEFAULT_HEAT_SOURCE_PRIMARY_DELTA = 1.5  # °C gap to engage primary (boiler/radiator)

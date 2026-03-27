@@ -24,12 +24,17 @@ from ..const import (
     MODE_HEATING,
     MODE_IDLE,
     TargetTemps,
+    make_roommind_context,
 )
 from ..utils.device_utils import (
+    DEFAULT_IDLE_SETBACK_OFFSET,
     IDLE_ACTION_FAN_ONLY,
+    IDLE_ACTION_SETBACK,
     get_ac_eids,
+    get_direct_setpoint_eids,
     get_idle_action,
     get_trv_eids,
+    has_reliable_hvac_modes,
 )
 from ..utils.temp_utils import celsius_to_ha_temp
 from .mpc_optimizer import MPCOptimizer, MPCPlan
@@ -61,6 +66,26 @@ def _cache_entry(service: str, data: dict) -> dict[str, Any]:
     }
 
 
+def _should_use_cache(state: Any) -> bool:
+    """Return True when the sent-command cache should be trusted.
+
+    The cache exists for IR-controlled devices that never report state changes.
+    When a device has a real HVAC state (not unavailable/unknown), the device's
+    actual reported state is authoritative and the cache must not suppress
+    retries — a cached "off" must not prevent re-sending when the device
+    clearly reports it is still heating.
+    """
+    if state is None:
+        return True
+    return state.state in ("unavailable", "unknown")
+
+
+def _snap_to_step(value: float, step: float | None) -> float:
+    if step is None or step <= 0:
+        return value
+    return round(round(value / step) * step, 2)
+
+
 def clear_command_cache() -> None:
     """Clear the sent-command cache (for tests)."""
     _last_commands.clear()
@@ -85,16 +110,18 @@ async def async_turn_off_climate(
     if not hvac_modes or "off" in hvac_modes:
         if state and state.state == "off":
             return  # already off
-        # Cache fallback for IR devices
-        cached = _last_commands.get(entity_id)
-        if cached and cached.get("service") == "set_hvac_mode" and cached.get("hvac_mode") == "off":
-            return
+        # Cache fallback for IR devices (only when device has no reliable state)
+        if _should_use_cache(state):
+            cached = _last_commands.get(entity_id)
+            if cached and cached.get("service") == "set_hvac_mode" and cached.get("hvac_mode") == "off":
+                return
         try:
             await hass.services.async_call(
                 "climate",
                 "set_hvac_mode",
                 {"entity_id": entity_id, "hvac_mode": "off"},
                 blocking=True,
+                context=make_roommind_context(),
             )
             _last_commands[entity_id] = _cache_entry("set_hvac_mode", {"hvac_mode": "off"})
         except Exception:  # noqa: BLE001
@@ -128,7 +155,7 @@ async def async_turn_off_climate(
         )
         if cur_check is not None and round(cur_check, 1) == round(fallback_temp, 1):
             return
-        if cur_check is None:
+        if cur_check is None and _should_use_cache(state):
             cached = _last_commands.get(entity_id)
             if cached and cached.get("service") == "set_temperature":
                 c_low = cached.get("target_temp_low")
@@ -145,7 +172,7 @@ async def async_turn_off_climate(
         current_temp_setting = state.attributes.get("temperature")
         if current_temp_setting is not None and round(current_temp_setting, 1) == round(fallback_temp, 1):
             return
-        if current_temp_setting is None:
+        if current_temp_setting is None and _should_use_cache(state):
             cached = _last_commands.get(entity_id)
             if (
                 cached
@@ -168,6 +195,7 @@ async def async_turn_off_climate(
             "set_temperature",
             svc_data,
             blocking=True,
+            context=make_roommind_context(),
         )
         _last_commands[entity_id] = _cache_entry("set_temperature", svc_data)
     except Exception:  # noqa: BLE001
@@ -186,15 +214,97 @@ async def async_idle_device(
     devices: list[dict],
     *,
     area_id: str = "unknown",
+    targets: TargetTemps | None = None,
 ) -> None:
     """Idle a climate device per its configured idle_action.
 
     "off"      -> async_turn_off_climate() (existing behavior)
     "fan_only" -> hvac_mode=fan_only + set_fan_mode(idle_fan_mode)
-    Falls back to off when fan_only is not supported by the device.
+    "setback"  -> keep current hvac_mode, shift target by offset
+    Falls back to off when the configured action is not applicable.
     """
     idle_action, idle_fan_mode = get_idle_action(devices, entity_id)
 
+    # --- SETBACK branch ---
+    if idle_action == IDLE_ACTION_SETBACK:
+        state = hass.states.get(entity_id)
+        current_hvac = state.state if state else None
+
+        if current_hvac not in ("heat", "cool") or targets is None:
+            _LOGGER.debug(
+                "Area '%s': setback not applicable for '%s' (hvac=%s, targets=%s), falling back to off",
+                area_id,
+                entity_id,
+                current_hvac,
+                targets,
+            )
+            await async_turn_off_climate(hass, entity_id, area_id=area_id)
+            return
+
+        # Compute setback temperature
+        if current_hvac == "heat" and targets.heat is not None:
+            setback_temp = targets.heat - DEFAULT_IDLE_SETBACK_OFFSET
+        elif current_hvac == "cool" and targets.cool is not None:
+            setback_temp = targets.cool + DEFAULT_IDLE_SETBACK_OFFSET
+        else:
+            await async_turn_off_climate(hass, entity_id, area_id=area_id)
+            return
+
+        # Convert to HA units FIRST, then clamp to device min/max
+        # (device attributes min_temp/max_temp are in HA units, not Celsius)
+        ha_t = celsius_to_ha_temp(hass, setback_temp)
+        min_t = state.attributes.get("min_temp")
+        max_t = state.attributes.get("max_temp")
+        if min_t is not None:
+            ha_t = max(ha_t, float(min_t))
+        if max_t is not None:
+            ha_t = min(ha_t, float(max_t))
+        step = state.attributes.get("target_temp_step")
+        if step is not None:
+            ha_t = _snap_to_step(ha_t, float(step))
+            if min_t is not None:
+                ha_t = max(ha_t, float(min_t))
+            if max_t is not None:
+                ha_t = min(ha_t, float(max_t))
+
+        # Redundancy check: already at setback temp
+        current_temp_attr = state.attributes.get("temperature")
+        if current_temp_attr is not None and abs(float(current_temp_attr) - ha_t) < 0.1:
+            return
+
+        # Cache check (only for devices without reliable state feedback)
+        if _should_use_cache(state):
+            cached = _last_commands.get(entity_id)
+            if cached and cached.get("service") == "set_temperature" and cached.get("temperature") == ha_t:
+                return
+
+        _LOGGER.debug(
+            "Area '%s': setback on '%s' — target %.1f → %.1f",
+            area_id,
+            entity_id,
+            targets.heat if current_hvac == "heat" else targets.cool,
+            ha_t,
+        )
+        try:
+            await hass.services.async_call(
+                "climate",
+                "set_temperature",
+                {"entity_id": entity_id, "temperature": ha_t},
+                blocking=True,
+                context=make_roommind_context(),
+            )
+            _last_commands[entity_id] = _cache_entry("set_temperature", {"temperature": ha_t})
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning(
+                "Area '%s': climate.set_temperature(%.1f) failed on '%s'",
+                area_id,
+                ha_t,
+                entity_id,
+                exc_info=True,
+            )
+        return
+
+    # --- OFF branch ---
     if idle_action != IDLE_ACTION_FAN_ONLY:
         await async_turn_off_climate(hass, entity_id, area_id=area_id)
         return
@@ -217,12 +327,12 @@ async def async_idle_device(
         if not idle_fan_mode or current_fan == idle_fan_mode:
             return
 
-    # Cache fallback for IR devices
-    cached = _last_commands.get(entity_id)
-    if cached and cached.get("service") == "set_hvac_mode" and cached.get("hvac_mode") == "fan_only":
-        # Already sent fan_only; check fan_mode cache too
-        if not idle_fan_mode:
-            return
+    # Cache fallback for IR devices (only when device has no reliable state)
+    if _should_use_cache(state):
+        cached = _last_commands.get(entity_id)
+        if cached and cached.get("service") == "set_hvac_mode" and cached.get("hvac_mode") == "fan_only":
+            if not idle_fan_mode:
+                return
 
     try:
         await hass.services.async_call(
@@ -230,6 +340,7 @@ async def async_idle_device(
             "set_hvac_mode",
             {"entity_id": entity_id, "hvac_mode": "fan_only"},
             blocking=True,
+            context=make_roommind_context(),
         )
         _last_commands[entity_id] = _cache_entry("set_hvac_mode", {"hvac_mode": "fan_only"})
     except Exception:  # noqa: BLE001
@@ -250,6 +361,7 @@ async def async_idle_device(
                     "set_fan_mode",
                     {"entity_id": entity_id, "fan_mode": idle_fan_mode},
                     blocking=True,
+                    context=make_roommind_context(),
                 )
             except Exception:  # noqa: BLE001
                 _LOGGER.warning(
@@ -282,6 +394,28 @@ def resolve_hvac_mode(desired: str, hvac_modes: list[str]) -> str | None:
     return None
 
 
+# Assumed full mode set for devices whose hvac_modes attribute is unreliable.
+# Deliberately excludes "heat_cool" so the cascade falls through to separate
+# "heat"/"cool" branches which work for more device types.
+_ASSUMED_FULL_MODES: list[str] = ["off", "heat", "cool", "fan_only"]
+
+
+def _effective_ac_modes(state: Any) -> list[str]:
+    """Return hvac_modes, assuming full capability when modes appear unreliable.
+
+    When a device reports no active modes (heat/cool/heat_cool/auto),
+    the integration likely hides modes or is misconfigured.  Return a
+    generous assumed set so the command cascade picks the right mode.  The actual
+    service call may still fail — the caller's try/except handles that safely.
+    """
+    if state is None:
+        return []
+    modes = state.attributes.get("hvac_modes") or []
+    if has_reliable_hvac_modes(state):
+        return modes
+    return _ASSUMED_FULL_MODES
+
+
 # Maximum prediction uncertainty (degC) for MPC to be used.
 # Physical meaning: "use MPC when the 5-min prediction is accurate to ±0.5°C."
 MPC_MAX_PREDICTION_STD = 0.5
@@ -291,6 +425,8 @@ PLAN_DT_MINUTES = 5
 MIN_HORIZON_HOURS = 2
 HORIZON_MULTIPLIER = 2.5
 DEFAULT_OUTDOOR_TEMP_FALLBACK = 10.0
+SAFETY_GUARD_MIN_BLOCKS = 6  # Minimum guard horizon (30 min floor)
+GUARD_PREDICTION_MARGIN = 0.2  # °C margin for prediction-based guard bypass
 
 # Minimum sample counts before MPC is allowed.
 # Each EKF update covers ~3 min (EKF_UPDATE_MIN_DT), so these correspond
@@ -305,7 +441,7 @@ def check_acs_can_heat(hass: HomeAssistant, room_config: dict) -> bool:
         state = hass.states.get(eid)
         if state is None:
             continue
-        modes = state.attributes.get("hvac_modes", [])
+        modes = _effective_ac_modes(state)
         if "heat" in modes or "heat_cool" in modes or "auto" in modes:
             return True
     return False
@@ -397,12 +533,14 @@ class MPCController:
         heating_system_type: str = "",
         mode_on_since: float | None = None,
         shading_factor: float = 1.0,
+        q_occupancy: float = 0.0,
     ) -> None:
         self.hass = hass
         self.room_config = room_config
         self.thermostats: list[str] = get_trv_eids(room_config.get("devices", []))
         self.acs: list[str] = get_ac_eids(room_config.get("devices", []))
         self._devices: list[dict] = room_config.get("devices", [])
+        self._direct_eids: set[str] = get_direct_setpoint_eids(self._devices)
         self.climate_mode: str = room_config.get("climate_mode", "auto")
         self.outdoor_temp = outdoor_temp
         self.outdoor_forecast = outdoor_forecast or []
@@ -420,6 +558,8 @@ class MPCController:
         self._heating_system_type = heating_system_type
         self._mode_on_since = mode_on_since
         self._shading_factor = shading_factor
+        self.q_occupancy = q_occupancy
+        self._idle_targets: TargetTemps | None = None
 
         s = settings or {}
         self.outdoor_cooling_min = s.get("outdoor_cooling_min", DEFAULT_OUTDOOR_COOLING_MIN)
@@ -471,6 +611,7 @@ class MPCController:
             PLAN_DT_MINUTES,
             q_solar=self.q_solar,
             q_residual=self.q_residual,
+            q_occupancy=self.q_occupancy,
         )
         if pred_std < MPC_MAX_PREDICTION_STD and self._has_enough_data(can_heat, can_cool):
             return self._evaluate_mpc(current_temp, targets)
@@ -501,6 +642,24 @@ class MPCController:
         min_run_seconds = get_min_run_blocks(self._heating_system_type, PLAN_DT_MINUTES) * PLAN_DT_MINUTES * 60
         return (time.time() - self._mode_on_since) < min_run_seconds
 
+    def _predict_idle_drift(self, current_temp: float, dt_minutes: float) -> float:
+        """Predict room temperature assuming no active HVAC over *dt_minutes*.
+
+        Used by the safety guard to check whether temperature will drift below
+        (or above) target before suppressing optimizer recommendations.
+        """
+        model = self._model_manager.get_model(self._area_id)
+        T_out = self.outdoor_temp if self.outdoor_temp is not None else DEFAULT_OUTDOOR_TEMP_FALLBACK
+        return model.predict(
+            current_temp,
+            T_out,
+            Q_active=0.0,
+            dt_minutes=dt_minutes,
+            q_solar=self.q_solar * self._shading_factor,
+            q_residual=self.q_residual,
+            q_occupancy=self.q_occupancy,
+        )
+
     def _evaluate_mpc(
         self,
         current_temp: float | None,
@@ -525,6 +684,9 @@ class MPCController:
 
         # Build residual heat series (decaying from current q_residual)
         residual_series = self._build_residual_series(horizon_blocks)
+
+        # Build occupancy heat series (constant over horizon)
+        occupancy_series = [self.q_occupancy] * horizon_blocks
 
         # Build dual target series with schedule lookahead for pre-heating/pre-cooling.
         # None values (from "off" action) are replaced with current_temp so the
@@ -572,6 +734,7 @@ class MPCController:
             dt_minutes=PLAN_DT_MINUTES,
             solar_series=solar_series,
             residual_series=residual_series,
+            occupancy_series=occupancy_series,
         )
         self.last_plan = plan
 
@@ -580,15 +743,24 @@ class MPCController:
 
         # Safety guard: don't heat above the maximum upcoming target,
         # don't cool below the minimum upcoming target, while preserving
-        # pre-heating/pre-cooling when a schedule change justifies it.
-        near_heat = heat_target_series[:6]
-        near_cool = cool_target_series[:6]
+        # pre-heating/pre-cooling when the model predicts a drift past target.
+        # The guard horizon scales with heating system response time.
+        guard_blocks = max(SAFETY_GUARD_MIN_BLOCKS, min_run)
+        guard_horizon_minutes = guard_blocks * PLAN_DT_MINUTES
+        near_heat = heat_target_series[:guard_blocks]
+        near_cool = cool_target_series[:guard_blocks]
         if near_heat and action == MODE_HEATING and current_temp >= max(near_heat):
-            if not self._within_min_run(MODE_HEATING):
+            predicted = self._predict_idle_drift(current_temp, guard_horizon_minutes)
+            if predicted < min(near_heat) - GUARD_PREDICTION_MARGIN:
+                pass  # model predicts dip — allow optimizer's HEAT decision
+            elif not self._within_min_run(MODE_HEATING):
                 action = MODE_IDLE
                 power_fraction = 0.0
         elif near_cool and action == MODE_COOLING and current_temp <= min(near_cool):
-            if not self._within_min_run(MODE_COOLING):
+            predicted = self._predict_idle_drift(current_temp, guard_horizon_minutes)
+            if predicted > max(near_cool) + GUARD_PREDICTION_MARGIN:
+                pass  # model predicts rise — allow optimizer's COOL decision
+            elif not self._within_min_run(MODE_COOLING):
                 action = MODE_IDLE
                 power_fraction = 0.0
 
@@ -780,6 +952,10 @@ class MPCController:
             t = targets
             targets = TargetTemps(heat=t, cool=t) if t is not None else TargetTemps(heat=None, cool=None)
 
+        # Store targets for _call delegation (setback idle_action) — must be
+        # after backward-compat conversion so legacy callers get a TargetTemps.
+        self._idle_targets = targets
+
         # Resolve effective target_temp for the current mode
         if mode == MODE_HEATING:
             target_temp = targets.heat
@@ -818,7 +994,7 @@ class MPCController:
             ha_cool_target = celsius_to_ha_temp(self.hass, targets.cool) if targets.cool is not None else None
             for eid in thermostats:
                 if eid in _forced_off:
-                    await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id)
+                    await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id, targets=targets)
                     continue
                 if can_heat and ha_heat_target is not None:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "heat"})
@@ -829,11 +1005,12 @@ class MPCController:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "off"})
             for eid in self.acs:
                 if eid in _forced_off:
-                    await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id)
+                    await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id, targets=targets)
                     continue
                 ac_state = self.hass.states.get(eid)
-                ac_modes = (ac_state.attributes.get("hvac_modes") or []) if ac_state else []
+                ac_modes = _effective_ac_modes(ac_state)
                 ac_target = ha_cool_target if ha_cool_target is not None else ha_heat_target
+                ac_heat_target = ha_heat_target if ha_heat_target is not None else ha_cool_target
                 if ac_target is None:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "off"})
                 elif "heat_cool" in ac_modes:
@@ -876,12 +1053,12 @@ class MPCController:
                 elif can_heat and "heat" in ac_modes:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "heat"})
                     await self._call(
-                        "set_temperature", {"entity_id": eid, "temperature": ac_target}, temp_intent="heat"
+                        "set_temperature", {"entity_id": eid, "temperature": ac_heat_target}, temp_intent="heat"
                     )
                 elif "auto" in ac_modes:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "auto"})
                     await self._call(
-                        "set_temperature", {"entity_id": eid, "temperature": ac_target}, temp_intent="heat"
+                        "set_temperature", {"entity_id": eid, "temperature": ac_heat_target}, temp_intent="heat"
                     )
                 else:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "off"})
@@ -910,7 +1087,7 @@ class MPCController:
                             )
                         else:
                             ac_state = self.hass.states.get(cmd.entity_id)
-                            ac_modes = (ac_state.attributes.get("hvac_modes") or []) if ac_state else []
+                            ac_modes = _effective_ac_modes(ac_state)
                             if "heat" in ac_modes:
                                 await self._call(
                                     "set_hvac_mode",
@@ -935,7 +1112,9 @@ class MPCController:
                             )
                     continue
                 if cmd.entity_id in _forced_off and cmd.active:
-                    await async_idle_device(self.hass, cmd.entity_id, self._devices, area_id=self._area_id)
+                    await async_idle_device(
+                        self.hass, cmd.entity_id, self._devices, area_id=self._area_id, targets=targets
+                    )
                     continue
                 if cmd.active:
                     if cmd.device_type == "thermostat":
@@ -948,7 +1127,8 @@ class MPCController:
                             t = min(trv_heat_boost, t)
                         else:
                             t = trv_heat_boost if self.has_external_sensor else effective_target
-                        ha_t = celsius_to_ha_temp(self.hass, t)
+                        t_final = effective_target if cmd.entity_id in self._direct_eids else t
+                        ha_t = celsius_to_ha_temp(self.hass, t_final)
                         await self._call("set_hvac_mode", {"entity_id": cmd.entity_id, "hvac_mode": "heat"})
                         await self._call(
                             "set_temperature",
@@ -965,9 +1145,10 @@ class MPCController:
                             t = min(ac_heat_boost, t)
                         else:
                             t = effective_target
-                        ha_t = celsius_to_ha_temp(self.hass, t)
+                        t_final = effective_target if cmd.entity_id in self._direct_eids else t
+                        ha_t = celsius_to_ha_temp(self.hass, t_final)
                         ac_state = self.hass.states.get(cmd.entity_id)
-                        ac_modes = (ac_state.attributes.get("hvac_modes") or []) if ac_state else []
+                        ac_modes = _effective_ac_modes(ac_state)
                         if "heat" in ac_modes:
                             await self._call("set_hvac_mode", {"entity_id": cmd.entity_id, "hvac_mode": "heat"})
                             await self._call(
@@ -1025,12 +1206,14 @@ class MPCController:
             else:
                 trv_target = trv_heat_boost if self.has_external_sensor else effective_target
             ha_trv = celsius_to_ha_temp(self.hass, trv_target)
+            ha_trv_direct = celsius_to_ha_temp(self.hass, effective_target)
             for eid in thermostats:
                 if eid in _forced_off:
-                    await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id)
+                    await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id, targets=targets)
                     continue
+                ha_t = ha_trv_direct if eid in self._direct_eids else ha_trv
                 await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "heat"})
-                await self._call("set_temperature", {"entity_id": eid, "temperature": ha_trv}, temp_intent="heat")
+                await self._call("set_temperature", {"entity_id": eid, "temperature": ha_t}, temp_intent="heat")
             # ACs: proportional setpoint in Full Control, actual target otherwise
             if self.has_external_sensor and current_temp is not None:
                 ac_heat_target = round(
@@ -1042,27 +1225,23 @@ class MPCController:
             else:
                 ac_heat_target = effective_target
             ha_ac_target = celsius_to_ha_temp(self.hass, ac_heat_target)
+            ha_ac_direct = celsius_to_ha_temp(self.hass, effective_target)
             for eid in self.acs:
                 if eid in _forced_off:
-                    await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id)
+                    await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id, targets=targets)
                     continue
+                ha_t = ha_ac_direct if eid in self._direct_eids else ha_ac_target
                 ac_state = self.hass.states.get(eid)
-                ac_modes = (ac_state.attributes.get("hvac_modes") or []) if ac_state else []
+                ac_modes = _effective_ac_modes(ac_state)
                 if "heat" in ac_modes:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "heat"})
-                    await self._call(
-                        "set_temperature", {"entity_id": eid, "temperature": ha_ac_target}, temp_intent="heat"
-                    )
+                    await self._call("set_temperature", {"entity_id": eid, "temperature": ha_t}, temp_intent="heat")
                 elif "heat_cool" in ac_modes:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "heat_cool"})
-                    await self._call(
-                        "set_temperature", {"entity_id": eid, "temperature": ha_ac_target}, temp_intent="heat"
-                    )
+                    await self._call("set_temperature", {"entity_id": eid, "temperature": ha_t}, temp_intent="heat")
                 elif "auto" in ac_modes:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "auto"})
-                    await self._call(
-                        "set_temperature", {"entity_id": eid, "temperature": ha_ac_target}, temp_intent="heat"
-                    )
+                    await self._call("set_temperature", {"entity_id": eid, "temperature": ha_t}, temp_intent="heat")
                 else:
                     await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "off"})
         elif mode == MODE_COOLING:
@@ -1076,15 +1255,17 @@ class MPCController:
             else:
                 ac_cool_target = effective_target
             ha_target = celsius_to_ha_temp(self.hass, ac_cool_target)
+            ha_cool_direct = celsius_to_ha_temp(self.hass, effective_target)
             for eid in self.acs:
                 if eid in _forced_off:
-                    await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id)
+                    await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id, targets=targets)
                     continue
+                ha_t = ha_cool_direct if eid in self._direct_eids else ha_target
                 await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "cool"})
-                await self._call("set_temperature", {"entity_id": eid, "temperature": ha_target}, temp_intent="cool")
+                await self._call("set_temperature", {"entity_id": eid, "temperature": ha_t}, temp_intent="cool")
             for eid in thermostats:
                 if eid in _forced_off:
-                    await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id)
+                    await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id, targets=targets)
                     continue
                 await self._call("set_hvac_mode", {"entity_id": eid, "hvac_mode": "off"})
         elif mode == MODE_IDLE:
@@ -1129,7 +1310,7 @@ class MPCController:
                         eid,
                     )
                     continue
-                await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id)
+                await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id, targets=targets)
 
     async def _call(self, service: str, data: dict, *, temp_intent: str = "") -> None:
         eid = data.get("entity_id")
@@ -1137,7 +1318,7 @@ class MPCController:
 
         # Delegate "turn off" to fallback-aware helper (handles heat-only TRVs)
         if service == "set_hvac_mode" and data.get("hvac_mode") == "off" and eid:
-            await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id)
+            await async_idle_device(self.hass, eid, self._devices, area_id=self._area_id, targets=self._idle_targets)
             return
 
         # Resolve hvac_mode to a supported mode (handles auto-only devices)
@@ -1145,13 +1326,25 @@ class MPCController:
             hvac_modes = state.attributes.get("hvac_modes") or []
             resolved = resolve_hvac_mode(data["hvac_mode"], hvac_modes)
             if resolved is None:
-                _LOGGER.debug(
-                    "Area '%s': device '%s' does not support '%s' or any fallback, skipping",
-                    self._area_id,
-                    eid,
-                    data["hvac_mode"],
-                )
-                return
+                if not has_reliable_hvac_modes(state):
+                    # Modes unreliable (device with incomplete modes).
+                    # Send the desired mode directly; the device may reveal
+                    # its full mode list once active.
+                    resolved = data["hvac_mode"]
+                    _LOGGER.debug(
+                        "Area '%s': device '%s' has incomplete modes, sending '%s' directly",
+                        self._area_id,
+                        eid,
+                        resolved,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "Area '%s': device '%s' does not support '%s' or any fallback, skipping",
+                        self._area_id,
+                        eid,
+                        data["hvac_mode"],
+                    )
+                    return
             if resolved != data["hvac_mode"]:
                 _LOGGER.debug(
                     "Area '%s': device '%s' resolved '%s' -> '%s'",
@@ -1207,6 +1400,31 @@ class MPCController:
             if dev_max is not None and data["target_temp_high"] > dev_max:
                 data = {**data, "target_temp_high": dev_max}
 
+        # Snap to device's target_temp_step (e.g. 1.0 for ACs that only accept integers)
+        if service == "set_temperature" and state:
+            step = state.attributes.get("target_temp_step")
+            if step is not None:
+                step = float(step)
+                dev_min = state.attributes.get("min_temp")
+                dev_max = state.attributes.get("max_temp")
+                if "temperature" in data:
+                    t = _snap_to_step(data["temperature"], step)
+                    if dev_max is not None and t > dev_max:
+                        t = dev_max
+                    if dev_min is not None and t < dev_min:
+                        t = dev_min
+                    data = {**data, "temperature": t}
+                if "target_temp_low" in data:
+                    lo = _snap_to_step(data["target_temp_low"], step)
+                    if dev_min is not None and lo < dev_min:
+                        lo = dev_min
+                    data = {**data, "target_temp_low": lo}
+                if "target_temp_high" in data:
+                    hi = _snap_to_step(data["target_temp_high"], step)
+                    if dev_max is not None and hi > dev_max:
+                        hi = dev_max
+                    data = {**data, "target_temp_high": hi}
+
         # --- Redundancy: primary (device state) then fallback (sent cache) ---
         skip = False
         if state:
@@ -1234,7 +1452,7 @@ class MPCController:
                         skip = True
 
         # Fallback: check sent-command cache (for IR devices without state feedback)
-        if not skip and eid:
+        if not skip and eid and _should_use_cache(state):
             cached = _last_commands.get(eid)
             if cached is not None and cached.get("service") == service:
                 if service == "set_hvac_mode":
@@ -1265,7 +1483,13 @@ class MPCController:
             return
 
         try:
-            await self.hass.services.async_call("climate", service, data, blocking=True)
+            await self.hass.services.async_call(
+                "climate",
+                service,
+                data,
+                blocking=True,
+                context=make_roommind_context(),
+            )
             if eid:
                 _last_commands[eid] = _cache_entry(service, data)
         except Exception:  # noqa: BLE001

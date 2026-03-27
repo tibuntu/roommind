@@ -188,6 +188,7 @@ class RoomMindStore:
                 "devices": config.get("devices", []),
                 "temperature_sensor": config.get("temperature_sensor", ""),
                 "humidity_sensor": config.get("humidity_sensor", ""),
+                "occupancy_sensors": config.get("occupancy_sensors", []),
                 "climate_mode": config.get("climate_mode", "auto"),
                 "schedules": config.get("schedules", []),
                 "schedule_selector_entity": config.get("schedule_selector_entity", ""),
@@ -213,6 +214,7 @@ class RoomMindStore:
                 "cover_schedule_selector_entity": config.get("cover_schedule_selector_entity", ""),
                 "covers_night_close": config.get("covers_night_close", False),
                 "covers_night_position": config.get("covers_night_position", 0),
+                "ignore_presence": config.get("ignore_presence", False),
                 "is_outdoor": config.get("is_outdoor", False),
                 "valve_protection_exclude": config.get("valve_protection_exclude", []),
                 "heat_source_orchestration": config.get("heat_source_orchestration", False),
@@ -223,6 +225,7 @@ class RoomMindStore:
                 "heat_source_ac_min_outdoor": config.get(
                     "heat_source_ac_min_outdoor", DEFAULT_HEAT_SOURCE_AC_MIN_OUTDOOR
                 ),
+                "climate_control_enabled": config.get("climate_control_enabled", True),
             }
             # Directional device sync for new rooms
             if "devices" in config and config["devices"]:

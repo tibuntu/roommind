@@ -14,6 +14,7 @@ export class RsDeviceSection extends LitElement {
   @property({ attribute: false }) public devices: DeviceConfig[] = [];
   @property({ type: String }) public selectedTempSensor = "";
   @property({ type: String }) public selectedHumiditySensor = "";
+  @property({ attribute: false }) public selectedOccupancySensors: Set<string> = new Set();
   @property({ attribute: false }) public selectedWindowSensors: Set<string> = new Set();
   @property({ type: Number }) public windowOpenDelay = 0;
   @property({ type: Number }) public windowCloseDelay = 0;
@@ -225,6 +226,23 @@ export class RsDeviceSection extends LitElement {
       min-width: 0;
     }
 
+    .setpoint-mode-row {
+      display: flex;
+      gap: 12px;
+      padding: 4px 14px 4px 42px;
+    }
+
+    .setpoint-mode-row ha-select {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .setpoint-mode-hint {
+      font-size: 12px;
+      color: var(--secondary-text-color);
+      padding: 2px 14px 4px 42px;
+    }
+
     .valve-exclude-row {
       display: flex;
       align-items: center;
@@ -337,6 +355,7 @@ export class RsDeviceSection extends LitElement {
     const hasClimate = this._selectedThermostats.size > 0 || this._selectedCoolingDevices.size > 0;
     const hasTempSensor = !!this.selectedTempSensor;
     const hasHumiditySensor = !!this.selectedHumiditySensor;
+    const hasOccupancySensors = this.selectedOccupancySensors.size > 0;
 
     return html`
       ${hasClimate
@@ -367,6 +386,16 @@ export class RsDeviceSection extends LitElement {
                 ${localize("devices.humidity_sensors", this.hass.language)}
               </div>
               ${this._renderViewRow(this.selectedHumiditySensor, "humidity")}
+            </div>
+          `
+        : nothing}
+      ${hasOccupancySensors
+        ? html`
+            <div class="device-group">
+              <div class="section-subtitle">
+                ${localize("devices.occupancy_sensors", this.hass.language)}
+              </div>
+              ${[...this.selectedOccupancySensors].map((id) => this._renderOccupancyViewRow(id))}
             </div>
           `
         : nothing}
@@ -425,10 +454,11 @@ export class RsDeviceSection extends LitElement {
     let displayValue = "";
     if (type === "climate") {
       const ct = attrs.current_temperature as number | undefined;
-      if (ct != null) displayValue = `${ct.toFixed(1)}\u00B0`;
+      if (ct != null) displayValue = `${ct.toFixed(1)}${tempUnit(this.hass)}`;
     } else if (type === "temp") {
-      if (state && state !== "unknown" && state !== "unavailable")
-        displayValue = `${Number(state).toFixed(1)}${tempUnit(this.hass)}`;
+      const tempVal = entityId.startsWith("climate.") ? attrs.current_temperature : state;
+      if (tempVal != null && tempVal !== "" && tempVal !== "unknown" && tempVal !== "unavailable")
+        displayValue = `${Number(tempVal).toFixed(1)}${tempUnit(this.hass)}`;
     } else {
       if (state && state !== "unknown" && state !== "unavailable")
         displayValue = `${Math.round(Number(state))}%`;
@@ -441,18 +471,28 @@ export class RsDeviceSection extends LitElement {
 
     const device =
       type === "climate" ? this.devices.find((d) => d.entity_id === entityId) : undefined;
-    const showFanOnlyBadge = device?.idle_action === "fan_only";
+    const showIdleBadge = device?.idle_action === "fan_only" || device?.idle_action === "setback";
+    const showDirectBadge =
+      device?.type === "trv" && device?.setpoint_mode === "direct" && !!this.selectedTempSensor;
 
     return html`
       <div class="view-row">
         <span class="view-name entity-link" @click=${() => openEntityInfo(this, entityId)}
           >${friendlyName}</span
         >
-        ${showFanOnlyBadge
+        ${showIdleBadge
           ? html`<span class="valve-exclude-badge">
-              ${localize("devices.idle_action_fan_only", this.hass.language)}${device!.idle_fan_mode
-                ? ` (${device!.idle_fan_mode})`
-                : nothing}
+              ${device!.idle_action === "fan_only"
+                ? html`${localize("devices.idle_action_fan_only", this.hass.language)}${device!
+                    .idle_fan_mode
+                    ? ` (${device!.idle_fan_mode})`
+                    : nothing}`
+                : localize("devices.idle_action_setback", this.hass.language)}
+            </span>`
+          : nothing}
+        ${showDirectBadge
+          ? html`<span class="valve-exclude-badge">
+              ${localize("devices.setpoint_mode_direct", this.hass.language)}
             </span>`
           : nothing}
         ${showExcludeBadge
@@ -486,6 +526,26 @@ export class RsDeviceSection extends LitElement {
     `;
   }
 
+  private _renderOccupancyViewRow(entityId: string) {
+    const entityState = this.hass.states[entityId];
+    const friendlyName = (entityState?.attributes?.friendly_name as string) || entityId;
+    const isOn = entityState?.state === "on";
+
+    return html`
+      <div class="view-row">
+        <span class="view-name entity-link" @click=${() => openEntityInfo(this, entityId)}
+          >${friendlyName}</span
+        >
+        <span
+          class="view-value"
+          style="color: ${isOn ? "var(--primary-color)" : "var(--secondary-text-color)"}"
+        >
+          ${isOn ? "\u25CF" : "\u25CB"}
+        </span>
+      </div>
+    `;
+  }
+
   private _renderEditMode() {
     // Fetch all area entities once, then filter by category
     // Exclude RoomMind's own entities to prevent self-assignment (#86)
@@ -503,8 +563,10 @@ export class RsDeviceSection extends LitElement {
     const areaTempSensors = this.hass?.states
       ? allAreaEntities.filter(
           (e) =>
-            e.entity_id.startsWith("sensor.") &&
-            this.hass.states[e.entity_id]?.attributes?.device_class === "temperature",
+            (e.entity_id.startsWith("sensor.") &&
+              this.hass.states[e.entity_id]?.attributes?.device_class === "temperature") ||
+            (e.entity_id.startsWith("climate.") &&
+              this.hass.states[e.entity_id]?.attributes?.current_temperature != null),
         )
       : [];
 
@@ -523,6 +585,17 @@ export class RsDeviceSection extends LitElement {
             ["window", "door", "opening"].includes(
               this.hass.states[e.entity_id]?.attributes?.device_class as string,
             ),
+        )
+      : [];
+
+    const areaOccupancySensors = this.hass?.states
+      ? allAreaEntities.filter(
+          (e) =>
+            (e.entity_id.startsWith("binary_sensor.") &&
+              ["occupancy", "motion", "presence"].includes(
+                this.hass.states[e.entity_id]?.attributes?.device_class as string,
+              )) ||
+            e.entity_id.startsWith("input_boolean."),
         )
       : [];
 
@@ -546,6 +619,11 @@ export class RsDeviceSection extends LitElement {
     const areaWindowIds = new Set(areaWindowSensors.map((e) => e.entity_id));
     const externalWindowSensors = [...this.selectedWindowSensors].filter(
       (id) => !areaWindowIds.has(id),
+    );
+
+    const areaOccupancyIds = new Set(areaOccupancySensors.map((e) => e.entity_id));
+    const externalOccupancySensors = [...this.selectedOccupancySensors].filter(
+      (id) => !areaOccupancyIds.has(id),
     );
 
     return html`
@@ -639,10 +717,26 @@ export class RsDeviceSection extends LitElement {
           : nothing}
       </div>
 
+      <div class="device-group">
+        <div class="section-subtitle">
+          ${localize("devices.occupancy_sensors", this.hass.language)}
+        </div>
+        <div class="device-list-scroll">
+          ${areaOccupancySensors.length > 0
+            ? areaOccupancySensors.map((entity) =>
+                this._renderOccupancyRow(entity.entity_id, false),
+              )
+            : html`<div class="no-devices">
+                ${localize("devices.no_occupancy_sensors", this.hass.language)}
+              </div>`}
+          ${externalOccupancySensors.map((id) => this._renderOccupancyRow(id, true))}
+        </div>
+      </div>
+
       <div class="entity-picker-wrap">
         <ha-entity-picker
           .hass=${this.hass}
-          .includeDomains=${["climate", "sensor", "binary_sensor", "input_number"]}
+          .includeDomains=${["climate", "sensor", "binary_sensor", "input_boolean", "input_number"]}
           .entityFilter=${this._entityFilter}
           .value=${""}
           label=${localize("devices.add_entity", this.hass.language)}
@@ -753,7 +847,7 @@ export class RsDeviceSection extends LitElement {
           <div class="device-entity">${entityId}</div>
         </div>
         ${currentTemp != null
-          ? html`<span class="device-value">${currentTemp.toFixed(1)}°</span>`
+          ? html`<span class="device-value">${currentTemp.toFixed(1)}${tempUnit(this.hass)}</span>`
           : currentState && currentState !== "unavailable"
             ? html`<span class="device-value" style="font-size:12px; opacity:0.6"
                 >${currentState}</span
@@ -792,7 +886,7 @@ export class RsDeviceSection extends LitElement {
         const hvacModes = (entityState?.attributes?.hvac_modes ?? []) as string[];
         const supportsFanOnly = hvacModes.includes("fan_only");
         const device = this.devices.find((d) => d.entity_id === entityId);
-        if (!isSelected || !supportsFanOnly || device?.type !== "ac") return nothing;
+        if (!isSelected || device?.type !== "ac") return nothing;
         return html`
           <div class="idle-action-row">
             <ha-select
@@ -803,9 +897,17 @@ export class RsDeviceSection extends LitElement {
                   value: "off",
                   label: localize("devices.idle_action_off", this.hass.language),
                 },
+                ...(supportsFanOnly
+                  ? [
+                      {
+                        value: "fan_only",
+                        label: localize("devices.idle_action_fan_only", this.hass.language),
+                      },
+                    ]
+                  : []),
                 {
-                  value: "fan_only",
-                  label: localize("devices.idle_action_fan_only", this.hass.language),
+                  value: "setback",
+                  label: localize("devices.idle_action_setback", this.hass.language),
                 },
               ]}
               @selected=${(e: Event) => this._onIdleActionChange(entityId, getSelectValue(e)!)}
@@ -815,8 +917,13 @@ export class RsDeviceSection extends LitElement {
               <ha-list-item value="off"
                 >${localize("devices.idle_action_off", this.hass.language)}</ha-list-item
               >
-              <ha-list-item value="fan_only"
-                >${localize("devices.idle_action_fan_only", this.hass.language)}</ha-list-item
+              ${supportsFanOnly
+                ? html`<ha-list-item value="fan_only"
+                    >${localize("devices.idle_action_fan_only", this.hass.language)}</ha-list-item
+                  >`
+                : nothing}
+              <ha-list-item value="setback"
+                >${localize("devices.idle_action_setback", this.hass.language)}</ha-list-item
               >
             </ha-select>
             ${device.idle_action === "fan_only"
@@ -838,6 +945,41 @@ export class RsDeviceSection extends LitElement {
                   </ha-select>
                 `
               : nothing}
+          </div>
+        `;
+      })()}
+      ${(() => {
+        const device = this.devices.find((d) => d.entity_id === entityId);
+        if (!isSelected || !this.selectedTempSensor || device?.type !== "trv") return nothing;
+        return html`
+          <div class="setpoint-mode-row">
+            <ha-select
+              .label=${localize("devices.setpoint_mode", this.hass.language)}
+              .value=${device?.setpoint_mode ?? "proportional"}
+              .options=${[
+                {
+                  value: "proportional",
+                  label: localize("devices.setpoint_mode_proportional", this.hass.language),
+                },
+                {
+                  value: "direct",
+                  label: localize("devices.setpoint_mode_direct", this.hass.language),
+                },
+              ]}
+              @selected=${(e: Event) => this._onSetpointModeChange(entityId, getSelectValue(e)!)}
+              @closed=${(e: Event) => e.stopPropagation()}
+              fixedMenuPosition
+            >
+              <ha-list-item value="proportional"
+                >${localize("devices.setpoint_mode_proportional", this.hass.language)}</ha-list-item
+              >
+              <ha-list-item value="direct"
+                >${localize("devices.setpoint_mode_direct", this.hass.language)}</ha-list-item
+              >
+            </ha-select>
+          </div>
+          <div class="setpoint-mode-hint">
+            ${localize("devices.setpoint_mode_hint", this.hass.language)}
           </div>
         `;
       })()}
@@ -865,7 +1007,9 @@ export class RsDeviceSection extends LitElement {
   private _renderSensorRow(entityId: string, type: "temp" | "humidity", external: boolean) {
     const entityState = this.hass.states[entityId];
     const friendlyName = (entityState?.attributes?.friendly_name as string) || entityId;
-    const currentValue = entityState?.state;
+    const currentValue = entityId.startsWith("climate.")
+      ? entityState?.attributes?.current_temperature
+      : entityState?.state;
     const selected = type === "temp" ? this.selectedTempSensor : this.selectedHumiditySensor;
     const isSelected = selected === entityId;
     const unit = type === "temp" ? tempUnit(this.hass) : "%";
@@ -890,7 +1034,9 @@ export class RsDeviceSection extends LitElement {
         </div>
         ${hasValue
           ? html`<span class="device-value"
-              >${type === "humidity" ? Math.round(Number(currentValue)) : currentValue}${unit}</span
+              >${type === "humidity"
+                ? Math.round(Number(currentValue))
+                : Number(currentValue).toFixed(1)}${unit}</span
             >`
           : nothing}
       </div>
@@ -928,6 +1074,42 @@ export class RsDeviceSection extends LitElement {
           style="color: ${isOpen ? "var(--warning-color, #ff9800)" : "var(--secondary-text-color)"}"
         >
           ${isOpen ? "\u25CF" : "\u25CB"}
+        </span>
+      </div>
+    `;
+  }
+
+  private _renderOccupancyRow(entityId: string, external: boolean) {
+    const isSelected = this.selectedOccupancySensors.has(entityId);
+    const entityState = this.hass.states[entityId];
+    const friendlyName = (entityState?.attributes?.friendly_name as string) || entityId;
+    const isOn = entityState?.state === "on";
+
+    return html`
+      <div class="device-row ${isSelected ? "selected" : ""}">
+        <ha-checkbox
+          .checked=${isSelected}
+          @change=${(e: Event) => {
+            const target = e.target as HTMLElement & { checked: boolean };
+            this._onOccupancySensorToggle(entityId, target.checked);
+          }}
+        ></ha-checkbox>
+        <div class="device-info">
+          <div class="device-name-row">
+            <span class="device-name">${friendlyName}</span>
+            ${external
+              ? html`<span class="external-badge"
+                  >${localize("devices.other_area", this.hass.language)}</span
+                >`
+              : nothing}
+          </div>
+          <div class="device-entity">${entityId}</div>
+        </div>
+        <span
+          class="device-value"
+          style="color: ${isOn ? "var(--primary-color)" : "var(--secondary-text-color)"}"
+        >
+          ${isOn ? "\u25CF" : "\u25CB"}
         </span>
       </div>
     `;
@@ -982,6 +1164,16 @@ export class RsDeviceSection extends LitElement {
     );
   }
 
+  private _onOccupancySensorToggle(entityId: string, checked: boolean) {
+    this.dispatchEvent(
+      new CustomEvent("occupancy-sensor-toggle", {
+        detail: { entityId, checked },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
   private _onWindowSensorToggle(entityId: string, checked: boolean) {
     this.dispatchEvent(
       new CustomEvent("window-sensor-toggle", {
@@ -1027,7 +1219,7 @@ export class RsDeviceSection extends LitElement {
   private _onIdleActionChange(entityId: string, idleAction: string): void {
     const newDevices = this.devices.map((d) => {
       if (d.entity_id !== entityId) return d;
-      const updated = { ...d, idle_action: idleAction as "off" | "fan_only" };
+      const updated = { ...d, idle_action: idleAction as "off" | "fan_only" | "setback" };
       if (idleAction === "fan_only" && !d.idle_fan_mode) {
         updated.idle_fan_mode = "low";
       }
@@ -1039,6 +1231,13 @@ export class RsDeviceSection extends LitElement {
   private _onIdleFanModeChange(entityId: string, fanMode: string): void {
     const newDevices = this.devices.map((d) =>
       d.entity_id === entityId ? { ...d, idle_fan_mode: fanMode } : d,
+    );
+    this._fireDeviceChanged(newDevices);
+  }
+
+  private _onSetpointModeChange(entityId: string, mode: string): void {
+    const newDevices = this.devices.map((d) =>
+      d.entity_id === entityId ? { ...d, setpoint_mode: mode as "proportional" | "direct" } : d,
     );
     this._fireDeviceChanged(newDevices);
   }
@@ -1072,6 +1271,7 @@ export class RsDeviceSection extends LitElement {
     if (this.devices.some((d) => d.entity_id === id)) return false;
     if (this.selectedTempSensor === id) return false;
     if (this.selectedHumiditySensor === id) return false;
+    if (this.selectedOccupancySensors.has(id)) return false;
     if (this.selectedWindowSensors.has(id)) return false;
     // For sensors, only show temperature and humidity
     if (id.startsWith("sensor.")) {
@@ -1080,9 +1280,17 @@ export class RsDeviceSection extends LitElement {
     }
     if (id.startsWith("binary_sensor.")) {
       const dc = this.hass.states[id]?.attributes?.device_class;
-      if (dc !== "window" && dc !== "door" && dc !== "opening") return false;
+      if (
+        dc !== "window" &&
+        dc !== "door" &&
+        dc !== "opening" &&
+        dc !== "occupancy" &&
+        dc !== "motion" &&
+        dc !== "presence"
+      )
+        return false;
     }
-    // input_number: allow all (no device_class filtering)
+    // input_number, input_boolean: allow all (no device_class filtering)
     return true;
   };
 
@@ -1091,11 +1299,18 @@ export class RsDeviceSection extends LitElement {
     if (!entityId) return;
 
     // Auto-categorize based on domain and device_class
-    let category: "climate" | "temp" | "humidity" | "window";
+    let category: "climate" | "temp" | "humidity" | "window" | "occupancy";
     if (entityId.startsWith("climate.")) {
       category = "climate";
+    } else if (entityId.startsWith("input_boolean.")) {
+      category = "occupancy";
     } else if (entityId.startsWith("binary_sensor.")) {
-      category = "window";
+      const dc = this.hass.states[entityId]?.attributes?.device_class;
+      if (dc === "occupancy" || dc === "motion" || dc === "presence") {
+        category = "occupancy";
+      } else {
+        category = "window";
+      }
     } else if (entityId.startsWith("input_number.")) {
       const uom = this.hass.states[entityId]?.attributes?.unit_of_measurement;
       category = uom === "%" ? "humidity" : "temp";
@@ -1110,6 +1325,14 @@ export class RsDeviceSection extends LitElement {
       const newDevices = [...this.devices, { entity_id: entityId, type, role: "auto" as const }];
       this._fireDeviceChanged(newDevices);
       // Clear the picker value
+      const picker = e.target as HTMLElement & { value: string };
+      picker.value = "";
+      return;
+    }
+
+    // For occupancy sensors, dispatch via toggle event (add)
+    if (category === "occupancy") {
+      this._onOccupancySensorToggle(entityId, true);
       const picker = e.target as HTMLElement & { value: string };
       picker.value = "";
       return;

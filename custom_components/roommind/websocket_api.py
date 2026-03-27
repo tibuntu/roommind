@@ -50,6 +50,7 @@ _ROOM_SAVE_FIELDS = (
     "devices",
     "temperature_sensor",
     "humidity_sensor",
+    "occupancy_sensors",
     "climate_mode",
     "schedules",
     "schedule_selector_entity",
@@ -75,11 +76,14 @@ _ROOM_SAVE_FIELDS = (
     "cover_schedule_selector_entity",
     "covers_night_close",
     "covers_night_position",
+    "ignore_presence",
     "is_outdoor",
     "heat_source_orchestration",
     "heat_source_primary_delta",
     "heat_source_outdoor_threshold",
     "heat_source_ac_min_outdoor",
+    "valve_protection_exclude",
+    "climate_control_enabled",
 )
 
 _SETTINGS_SAVE_FIELDS = (
@@ -236,12 +240,14 @@ async def websocket_list_rooms(
                 vol.Required("type"): vol.In(["trv", "ac"]),
                 vol.Optional("role", default="auto"): vol.In(["primary", "secondary", "auto"]),
                 vol.Optional("heating_system_type", default=""): vol.In(["", "radiator", "underfloor"]),
-                vol.Optional("idle_action", default="off"): vol.In(["off", "fan_only"]),
+                vol.Optional("idle_action", default="off"): vol.In(["off", "fan_only", "setback"]),
                 vol.Optional("idle_fan_mode", default="low"): str,
+                vol.Optional("setpoint_mode", default="proportional"): vol.In(["proportional", "direct"]),
             }
         ],
         vol.Optional("temperature_sensor"): str,
         vol.Optional("humidity_sensor"): str,
+        vol.Optional("occupancy_sensors"): [str],
         vol.Optional("climate_mode"): vol.In(CLIMATE_MODES),
         vol.Optional("schedules"): [{vol.Required("entity_id"): str}],
         vol.Optional("schedule_selector_entity"): str,
@@ -271,12 +277,14 @@ async def websocket_list_rooms(
         vol.Optional("cover_schedule_selector_entity"): str,
         vol.Optional("covers_night_close"): bool,
         vol.Optional("covers_night_position"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+        vol.Optional("ignore_presence"): bool,
         vol.Optional("is_outdoor"): bool,
         vol.Optional("valve_protection_exclude"): [str],
         vol.Optional("heat_source_orchestration"): bool,
         vol.Optional("heat_source_primary_delta"): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=5.0)),
         vol.Optional("heat_source_outdoor_threshold"): vol.All(vol.Coerce(float), vol.Range(min=-20, max=25)),
         vol.Optional("heat_source_ac_min_outdoor"): vol.All(vol.Coerce(float), vol.Range(min=-30, max=5)),
+        vol.Optional("climate_control_enabled"): bool,
     }
 )
 @websocket_api.async_response
@@ -297,7 +305,7 @@ async def websocket_save_room(
 
     # Reject RoomMind's own entities to prevent self-assignment (#86)
     own_prefix = f"{DOMAIN}_"
-    for field in ("thermostats", "acs", "window_sensors", "covers"):
+    for field in ("thermostats", "acs", "window_sensors", "covers", "occupancy_sensors"):
         for eid in config.get(field, []):
             if eid.split(".", 1)[-1].startswith(own_prefix):
                 connection.send_error(
@@ -774,6 +782,29 @@ async def websocket_boost_learning(
 
 
 # ---------------------------------------------------------------------------
+# Diagnostics
+# ---------------------------------------------------------------------------
+
+
+@websocket_api.websocket_command({vol.Required("type"): "roommind/diagnostics/get"})
+@websocket_api.async_response
+async def websocket_get_diagnostics(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Return full integration diagnostics via WebSocket."""
+    from .diagnostics import async_get_config_entry_diagnostics
+
+    entries = hass.config_entries.async_entries(DOMAIN)
+    if not entries:
+        connection.send_error(msg["id"], "not_found", "No config entry found")
+        return
+    result = await async_get_config_entry_diagnostics(hass, entries[0])
+    connection.send_result(msg["id"], result)
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 
@@ -792,3 +823,4 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, websocket_thermal_reset)
     websocket_api.async_register_command(hass, websocket_thermal_reset_all)
     websocket_api.async_register_command(hass, websocket_boost_learning)
+    websocket_api.async_register_command(hass, websocket_get_diagnostics)

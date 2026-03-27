@@ -59,8 +59,9 @@ export interface DeviceConfig {
   type: DeviceType;
   role: DeviceRole;
   heating_system_type?: string;
-  idle_action?: "off" | "fan_only"; // default "off"
+  idle_action?: "off" | "fan_only" | "setback"; // default "off"
   idle_fan_mode?: string; // default "low"
+  setpoint_mode?: "proportional" | "direct"; // default "proportional"
 }
 
 export interface CompressorGroup {
@@ -78,6 +79,7 @@ export interface RoomConfig {
   devices?: DeviceConfig[];
   temperature_sensor: string;
   humidity_sensor: string;
+  occupancy_sensors?: string[];
   window_sensors: string[];
   window_open_delay: number;
   window_close_delay: number;
@@ -105,12 +107,14 @@ export interface RoomConfig {
   cover_schedule_selector_entity?: string;
   covers_night_close?: boolean;
   covers_night_position?: number;
+  ignore_presence?: boolean;
   is_outdoor?: boolean;
   valve_protection_exclude?: string[];
   heat_source_orchestration?: boolean;
   heat_source_primary_delta?: number;
   heat_source_outdoor_threshold?: number;
   heat_source_ac_min_outdoor?: number;
+  climate_control_enabled?: boolean;
   live?: RoomLiveData;
 }
 
@@ -151,6 +155,11 @@ export interface GlobalSettings {
 }
 
 // HA types for panel integration
+export interface HassConnection {
+  addEventListener(event: string, callback: () => void): void;
+  removeEventListener(event: string, callback: () => void): void;
+}
+
 export interface HomeAssistant {
   callWS: <T>(msg: Record<string, unknown>) => Promise<T>;
   callService: (domain: string, service: string, data?: Record<string, unknown>) => Promise<void>;
@@ -161,6 +170,7 @@ export interface HomeAssistant {
   devices: Record<string, HassDeviceRegistryEntry>;
   language: string;
   config: { unit_system: { temperature: string } };
+  connection?: HassConnection;
 }
 
 export interface HassArea {

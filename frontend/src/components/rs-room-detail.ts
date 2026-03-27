@@ -39,6 +39,7 @@ export class RsRoomDetail extends LitElement {
   @state() private _devices: DeviceConfig[] = [];
   @state() private _selectedTempSensor = "";
   @state() private _selectedHumiditySensor = "";
+  @state() private _selectedOccupancySensors: Set<string> = new Set();
   @state() private _selectedWindowSensors: Set<string> = new Set();
   @state() private _windowOpenDelay = 0;
   @state() private _windowCloseDelay = 0;
@@ -66,8 +67,10 @@ export class RsRoomDetail extends LitElement {
   @state() private _coversNightClose = false;
   @state() private _coversNightPosition = 0;
   @state() private _editingCovers = false;
+  @state() private _ignorePresence = false;
   @state() private _isOutdoor = false;
   @state() private _valveProtectionExclude: Set<string> = new Set();
+  @state() private _climateControlEnabled = true;
   @state() private _heatSourceOrchestration = false;
   @state() private _heatSourcePrimaryDelta = 1.5;
   @state() private _heatSourceOutdoorThreshold = 5.0;
@@ -104,7 +107,8 @@ export class RsRoomDetail extends LitElement {
       }
     }
 
-    .outdoor-toggle-card {
+    .outdoor-toggle-card,
+    .climate-control-toggle-card {
       padding: 12px 16px;
     }
 
@@ -216,6 +220,7 @@ export class RsRoomDetail extends LitElement {
       }
       this._selectedTempSensor = this.config.temperature_sensor;
       this._selectedHumiditySensor = this.config.humidity_sensor ?? "";
+      this._selectedOccupancySensors = new Set(this.config.occupancy_sensors ?? []);
       this._selectedWindowSensors = new Set(this.config.window_sensors ?? []);
       this._windowOpenDelay = this.config.window_open_delay ?? 0;
       this._windowCloseDelay = this.config.window_close_delay ?? 0;
@@ -237,8 +242,10 @@ export class RsRoomDetail extends LitElement {
       this._coverScheduleSelectorEntity = this.config.cover_schedule_selector_entity ?? "";
       this._coversNightClose = this.config.covers_night_close ?? false;
       this._coversNightPosition = this.config.covers_night_position ?? 0;
+      this._ignorePresence = this.config.ignore_presence ?? false;
       this._isOutdoor = this.config.is_outdoor ?? false;
       this._valveProtectionExclude = new Set(this.config.valve_protection_exclude ?? []);
+      this._climateControlEnabled = this.config.climate_control_enabled ?? true;
       this._heatSourceOrchestration = this.config.heat_source_orchestration ?? false;
       this._heatSourcePrimaryDelta = this.config.heat_source_primary_delta ?? 1.5;
       this._heatSourceOutdoorThreshold = this.config.heat_source_outdoor_threshold ?? 5.0;
@@ -247,6 +254,7 @@ export class RsRoomDetail extends LitElement {
       this._devices = [];
       this._selectedTempSensor = "";
       this._selectedHumiditySensor = "";
+      this._selectedOccupancySensors = new Set();
       this._selectedWindowSensors = new Set();
       this._windowOpenDelay = 0;
       this._windowCloseDelay = 0;
@@ -268,8 +276,10 @@ export class RsRoomDetail extends LitElement {
       this._coverScheduleSelectorEntity = "";
       this._coversNightClose = false;
       this._coversNightPosition = 0;
+      this._ignorePresence = false;
       this._isOutdoor = false;
       this._valveProtectionExclude = new Set();
+      this._climateControlEnabled = true;
       this._heatSourceOrchestration = false;
       this._heatSourcePrimaryDelta = 1.5;
       this._heatSourceOutdoorThreshold = 5.0;
@@ -324,12 +334,21 @@ export class RsRoomDetail extends LitElement {
             .config=${this.config}
             .isOutdoor=${this._isOutdoor}
             .overrideInfo=${this._getEffectiveOverride()}
-            .climateControlActive=${this.climateControlActive}
+            .climateControlActive=${this.climateControlActive && this._climateControlEnabled}
             @display-name-changed=${this._onDisplayNameChanged}
           ></rs-hero-status>
 
           ${!this._isOutdoor
             ? html`
+                <ha-card class="climate-control-toggle-card">
+                  <rs-toggle-row
+                    .label=${localize("room.climate_control_toggle", this.hass.language)}
+                    .hint=${localize("room.climate_control_hint", this.hass.language)}
+                    .checked=${this._climateControlEnabled}
+                    @toggle-changed=${this._onClimateControlToggle}
+                  ></rs-toggle-row>
+                </ha-card>
+
                 <rs-section-card
                   icon="mdi:cog"
                   .heading=${localize("room.section.climate_mode", this.hass.language)}
@@ -424,6 +443,7 @@ export class RsRoomDetail extends LitElement {
                     .devices=${this._devices}
                     .selectedTempSensor=${this._selectedTempSensor}
                     .selectedHumiditySensor=${this._selectedHumiditySensor}
+                    .selectedOccupancySensors=${this._selectedOccupancySensors}
                     .selectedWindowSensors=${this._selectedWindowSensors}
                     .windowOpenDelay=${this._windowOpenDelay}
                     .windowCloseDelay=${this._windowCloseDelay}
@@ -431,6 +451,7 @@ export class RsRoomDetail extends LitElement {
                     .valveProtectionEnabled=${this.valveProtectionEnabled}
                     @device-changed=${this._onDeviceChanged}
                     @sensor-selected=${this._onSensorSelected}
+                    @occupancy-sensor-toggle=${this._onOccupancySensorToggle}
                     @window-sensor-toggle=${this._onWindowSensorToggle}
                     @window-open-delay-changed=${this._onWindowOpenDelayChanged}
                     @window-close-delay-changed=${this._onWindowCloseDelayChanged}
@@ -444,9 +465,11 @@ export class RsRoomDetail extends LitElement {
                   .presenceEnabled=${this.presenceEnabled}
                   .presencePersons=${this.presencePersons}
                   .selectedPresencePersons=${this._selectedPresencePersons}
+                  .ignorePresence=${this._ignorePresence}
                   .editing=${this._editingPresence}
                   .language=${this.hass.language}
                   @presence-persons-changed=${this._onPresencePersonsChanged}
+                  @ignore-presence-changed=${this._onIgnorePresenceChanged}
                   @editing-changed=${this._onPresenceEditingChanged}
                 ></rs-presence-section>
               `
@@ -627,6 +650,18 @@ export class RsRoomDetail extends LitElement {
     this._autoSave();
   }
 
+  private _onOccupancySensorToggle(e: CustomEvent<{ entityId: string; checked: boolean }>) {
+    const { entityId, checked } = e.detail;
+    const next = new Set(this._selectedOccupancySensors);
+    if (checked) {
+      next.add(entityId);
+    } else {
+      next.delete(entityId);
+    }
+    this._selectedOccupancySensors = next;
+    this._autoSave();
+  }
+
   private _onWindowSensorToggle(e: CustomEvent<{ entityId: string; checked: boolean }>) {
     const { entityId, checked } = e.detail;
     const next = new Set(this._selectedWindowSensors);
@@ -685,6 +720,11 @@ export class RsRoomDetail extends LitElement {
     this._autoSave();
   }
 
+  private _onIgnorePresenceChanged(e: CustomEvent<boolean>) {
+    this._ignorePresence = e.detail;
+    this._autoSave();
+  }
+
   private _onPresenceEditingChanged(e: CustomEvent<{ editing: boolean }>) {
     this._editingPresence = e.detail.editing;
   }
@@ -733,6 +773,11 @@ export class RsRoomDetail extends LitElement {
 
   // ---- Outdoor toggle ----
 
+  private _onClimateControlToggle(e: CustomEvent) {
+    this._climateControlEnabled = e.detail;
+    this._autoSave();
+  }
+
   private _onOutdoorToggle(e: CustomEvent<boolean>) {
     this._isOutdoor = e.detail;
     this._autoSave();
@@ -762,6 +807,7 @@ export class RsRoomDetail extends LitElement {
         devices: this._devices,
         temperature_sensor: this._selectedTempSensor,
         humidity_sensor: this._selectedHumiditySensor,
+        occupancy_sensors: [...this._selectedOccupancySensors],
         window_sensors: [...this._selectedWindowSensors],
         window_open_delay: this._windowOpenDelay,
         window_close_delay: this._windowCloseDelay,
@@ -775,6 +821,7 @@ export class RsRoomDetail extends LitElement {
         presence_persons: this._selectedPresencePersons.filter((p) => p),
         display_name: this._displayName,
         covers: [...this._selectedCovers],
+        climate_control_enabled: this._climateControlEnabled,
         covers_auto_enabled: this._coversAutoEnabled,
         covers_deploy_threshold: this._coversDeployThreshold,
         covers_min_position: this._coversMinPosition,
@@ -783,6 +830,7 @@ export class RsRoomDetail extends LitElement {
         cover_schedule_selector_entity: this._coverScheduleSelectorEntity,
         covers_night_close: this._coversNightClose,
         covers_night_position: this._coversNightPosition,
+        ignore_presence: this._ignorePresence,
         is_outdoor: this._isOutdoor,
         valve_protection_exclude: [...this._valveProtectionExclude],
         heat_source_orchestration: this._heatSourceOrchestration,

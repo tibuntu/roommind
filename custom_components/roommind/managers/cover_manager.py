@@ -77,11 +77,15 @@ class CoverManager:
         from the last position RoomMind commanded (in either direction), the user
         moved it manually. In that case, auto control pauses for
         COVER_USER_OVERRIDE_MINUTES.
+
+        Only triggers on actual position changes (not repeated reads of the same
+        position) to avoid perpetually refreshing the override timer.
         """
         state = self._get_state(area_id)
-        # Drift detection: only if we previously commanded a position
+        # Drift detection: only on actual position change when we previously commanded a position
         if (
-            state.last_commanded_position is not None
+            position != state.current_position
+            and state.last_commanded_position is not None
             and abs(position - state.last_commanded_position) > COVER_USER_CONFLICT_THRESHOLD
         ):
             state.user_override_until = time.time() + override_minutes * 60
@@ -116,6 +120,7 @@ class CoverManager:
         has_active_override: bool,
         forced_position: int | None = None,
         forced_reason: str = "",
+        current_temp: float | None = None,
     ) -> CoverDecision:
         """Evaluate whether to change cover positions this cycle.
 
@@ -125,22 +130,16 @@ class CoverManager:
         state = self._get_state(area_id)
         current = state.current_position
 
-        # Gate 1: Feature disabled or no covers configured
-        if not covers_auto_enabled or not cover_entity_ids:
+        # Gate 0: No covers configured — nothing to do
+        if not cover_entity_ids:
             return CoverDecision(target_position=current, changed=False, reason="disabled")
 
-        # Gate 2: Manual override — never fight the user
-        if has_active_override:
-            return CoverDecision(target_position=current, changed=False, reason="manual_override_active")
-
-        # Gate 2b: User manually moved cover (e.g. opened for balcony)
-        if state.user_override_until > time.time():
-            return CoverDecision(target_position=current, changed=False, reason="user_override_active")
-
-        # Gate 2c: Forced position (schedule or night close) — immediate, no rate limit
-        # User-defined schedules and night close should always apply instantly.
-        # Rate limiting only applies to thermal/solar MPC-based decisions below.
+        # Gate 1: Forced position (schedule or night close) — immediate, no rate limit.
+        # Schedules and night close work independently of covers_auto_enabled.
+        # Only user manual override (Gate 1b) can block them.
         if forced_position is not None:
+            if state.user_override_until > time.time():
+                return CoverDecision(target_position=current, changed=False, reason="user_override_active")
             state.last_was_forced = True
             if abs(forced_position - current) <= 2:
                 return CoverDecision(
@@ -148,7 +147,19 @@ class CoverManager:
                 )
             return self._apply_change(state, forced_position, f"forced({forced_reason})")
 
-        # Gate 3: Safety check — predicted_peak_temp must be available
+        # Gate 2: Auto control disabled — no solar/thermal decisions
+        if not covers_auto_enabled:
+            return CoverDecision(target_position=current, changed=False, reason="disabled")
+
+        # Gate 3: Manual override — never fight the user
+        if has_active_override:
+            return CoverDecision(target_position=current, changed=False, reason="manual_override_active")
+
+        # Gate 3b: User manually moved cover (e.g. opened for balcony)
+        if state.user_override_until > time.time():
+            return CoverDecision(target_position=current, changed=False, reason="user_override_active")
+
+        # Gate 4: Safety check — predicted_peak_temp must be available
         if predicted_peak_temp is None:
             return CoverDecision(target_position=current, changed=False, reason="no_prediction")
 
@@ -156,8 +167,13 @@ class CoverManager:
         was_forced = state.last_was_forced
         state.last_was_forced = False
 
-        # Gate 4: Not actually sunny
+        # Gate 4: Low solar — only retract if prediction also says no solar threat ahead
         if q_solar < COVER_SOLAR_MIN:
+            solar_threat = predicted_peak_temp > target_temp + covers_deploy_threshold and (
+                current_temp is None or predicted_peak_temp > current_temp
+            )
+            if solar_threat:
+                return CoverDecision(target_position=current, changed=False, reason="low_solar_but_peak_predicted")
             if current < 100:
                 if not was_forced and (time.time() - state.last_change_ts) < COVER_MIN_HOLD_SECONDS:
                     return CoverDecision(target_position=current, changed=False, reason="min_hold_time")
