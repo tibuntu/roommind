@@ -731,3 +731,105 @@ class TestMasterDeviceControl:
         # State should NOT have been updated to "cool"
         state = coordinator._compressor_manager.get_state("g1")
         assert state.master_action != "cool"
+
+    @pytest.mark.asyncio
+    async def test_script_only_mode_no_master_entity(self, hass, mock_config_entry):
+        """When only action_script is set (no master_entity), only the script fires."""
+        room = _room_with_device("living", "climate.living_trv")
+        store = _make_store_mock(rooms={"living": room})
+        store.get_settings.return_value = {
+            "climate_control_active": True,
+            "compressor_groups": [
+                {
+                    "id": "g1",
+                    "name": "G1",
+                    "members": ["climate.living_trv"],
+                    "action_script": "script.boiler_hook",
+                },
+            ],
+        }
+
+        script_state = MagicMock()
+        script_state.state = "off"
+        base_get = make_mock_states_get(temp="18.0")
+
+        def states_get(eid):
+            if eid == "script.boiler_hook":
+                return script_state
+            return base_get(eid)
+
+        hass.states.get = MagicMock(side_effect=states_get)
+        hass.services.async_call = AsyncMock()
+        hass.data = {"roommind": {"store": store}}
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+        await coordinator._async_update_data()
+
+        # No climate commands to any master entity
+        climate_hvac_calls = [
+            c
+            for c in hass.services.async_call.call_args_list
+            if len(c.args) >= 3
+            and c.args[0] == "climate"
+            and c.args[1] == "set_hvac_mode"
+            and c.args[2].get("entity_id") not in ["climate.living_trv"]
+        ]
+        assert len(climate_hvac_calls) == 0
+
+        # Script was called
+        script_calls = [
+            c
+            for c in hass.services.async_call.call_args_list
+            if len(c.args) >= 3 and c.args[0] == "script" and c.args[1] == "turn_on"
+        ]
+        assert len(script_calls) >= 1
+        assert script_calls[-1].args[2]["entity_id"] == "script.boiler_hook"
+        assert script_calls[-1].args[2]["variables"]["action"] == "heat"
+        assert script_calls[-1].args[2]["variables"]["master_entity"] == ""
+
+    @pytest.mark.asyncio
+    async def test_script_only_no_redundant_calls(self, hass, mock_config_entry):
+        """Script-only mode should not call script when action hasn't changed."""
+        room = _room_with_device("living", "climate.living_trv")
+        store = _make_store_mock(rooms={"living": room})
+        store.get_settings.return_value = {
+            "climate_control_active": True,
+            "compressor_groups": [
+                {
+                    "id": "g1",
+                    "name": "G1",
+                    "members": ["climate.living_trv"],
+                    "action_script": "script.boiler_hook",
+                },
+            ],
+        }
+
+        script_state = MagicMock()
+        script_state.state = "off"
+        base_get = make_mock_states_get(temp="18.0")
+
+        def states_get(eid):
+            if eid == "script.boiler_hook":
+                return script_state
+            return base_get(eid)
+
+        hass.states.get = MagicMock(side_effect=states_get)
+        hass.services.async_call = AsyncMock()
+        hass.data = {"roommind": {"store": store}}
+
+        coordinator = _create_coordinator(hass, mock_config_entry)
+
+        # First cycle: script fires (None -> heat)
+        await coordinator._async_update_data()
+        script_calls_1 = [
+            c for c in hass.services.async_call.call_args_list if len(c.args) >= 3 and c.args[0] == "script"
+        ]
+        assert len(script_calls_1) >= 1
+
+        # Second cycle: same action, script should NOT fire
+        hass.services.async_call.reset_mock()
+        await coordinator._async_update_data()
+        script_calls_2 = [
+            c for c in hass.services.async_call.call_args_list if len(c.args) >= 3 and c.args[0] == "script"
+        ]
+        assert len(script_calls_2) == 0

@@ -227,20 +227,21 @@ export class RsSettingsCompressor extends LitElement {
                 </ha-select>
                 <div class="field-hint">${localize("compressor.conflict_resolution_hint", l)}</div>
               </div>
-              <div class="field-row">
-                <ha-entity-picker
-                  .hass=${this.hass}
-                  .value=${group.action_script || ""}
-                  .includeDomains=${["script"]}
-                  .label=${localize("compressor.action_script", l)}
-                  @value-changed=${(e: CustomEvent) => {
-                    this._updateGroup(idx, "action_script", (e.detail?.value as string) ?? "");
-                  }}
-                ></ha-entity-picker>
-                <div class="field-hint">${localize("compressor.action_script_hint", l)}</div>
-              </div>
             `
           : nothing}
+
+        <div class="field-row">
+          <ha-entity-picker
+            .hass=${this.hass}
+            .value=${group.action_script || ""}
+            .includeDomains=${["script"]}
+            .label=${localize("compressor.action_script", l)}
+            @value-changed=${(e: CustomEvent) => {
+              this._updateGroup(idx, "action_script", (e.detail?.value as string) ?? "");
+            }}
+          ></ha-entity-picker>
+          <div class="field-hint">${localize("compressor.action_script_hint", l)}</div>
+        </div>
 
         <div class="delete-row">
           <rs-confirm-button

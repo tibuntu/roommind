@@ -47,7 +47,9 @@ from .control.mpc_controller import (
 from .control.solar import compute_q_solar_norm
 from .control.thermal_model import RoomModelManager
 from .managers.compressor_group_manager import (
+    CompressorGroupConfig,
     CompressorGroupManager,
+    CompressorGroupState,
     resolve_master_action,
 )
 from .managers.cover_orchestrator import CoverOrchestrator
@@ -1366,23 +1368,31 @@ class RoomMindCoordinator(DataUpdateCoordinator):
         rooms_config: dict[str, dict],
         settings: dict,
     ) -> None:
-        """Control master devices based on aggregate demand from member rooms."""
+        """Control master devices based on aggregate demand from member rooms.
+
+        Groups with master_entity get climate commands + optional script.
+        Groups with only action_script (no master_entity) get script-only mode.
+        """
         for gid, group in self._compressor_manager.get_groups().items():
-            if not group.master_entity:
+            if not group.master_entity and not group.action_script:
                 continue
             try:
-                # 1. Check master entity availability
-                master_state = self.hass.states.get(group.master_entity)
-                if master_state is None or master_state.state in (
-                    "unavailable",
-                    "unknown",
-                ):
-                    _LOGGER.warning(
-                        "Master '%s' (group '%s'): entity unavailable, skipping",
-                        group.master_entity,
-                        group.name,
-                    )
-                    continue
+                has_master = bool(group.master_entity)
+
+                # 1. Check master entity availability (only when configured)
+                master_state = None
+                if has_master:
+                    master_state = self.hass.states.get(group.master_entity)
+                    if master_state is None or master_state.state in (
+                        "unavailable",
+                        "unknown",
+                    ):
+                        _LOGGER.warning(
+                            "Master '%s' (group '%s'): entity unavailable, skipping",
+                            group.master_entity,
+                            group.name,
+                        )
+                        continue
 
                 # 2. Collect member room modes
                 modes = self._collect_member_room_modes(
@@ -1400,94 +1410,69 @@ class RoomMindCoordinator(DataUpdateCoordinator):
                     settings.get("outdoor_heating_max", DEFAULT_OUTDOOR_HEATING_MAX),
                 )
 
-                # 4. Min-run/min-off guard: prevent master short-cycling
-                if not self._compressor_manager.check_master_can_switch(gid, new_action):
-                    continue
-
-                # 5. Resolve HVAC mode
-                resolved_mode = self._resolve_master_hvac_mode(group.master_entity, new_action)
-
-                # 6. Skip when mode is unsupported — don't update state (K3)
-                if resolved_mode is None:
-                    if new_action != "idle":
-                        _LOGGER.warning(
-                            "Master '%s' (group '%s'): cannot resolve mode for action '%s', skipping",
-                            group.master_entity,
-                            group.name,
-                            new_action,
-                        )
-                    continue
-
-                # 7. Redundancy check — compare resolved mode with actual entity state
-                if master_state.state == resolved_mode:
-                    self._compressor_manager.set_master_action(gid, new_action)
-                    continue
-
-                # 8. Send climate command
-                try:
-                    await self.hass.services.async_call(
-                        "climate",
-                        "set_hvac_mode",
-                        {
-                            "entity_id": group.master_entity,
-                            "hvac_mode": resolved_mode,
-                        },
-                        blocking=True,
-                        context=make_roommind_context(),
-                    )
-                except Exception:  # noqa: BLE001
-                    _LOGGER.warning(
-                        "Master '%s' (group '%s'): failed to set hvac_mode '%s'",
-                        group.master_entity,
-                        group.name,
-                        resolved_mode,
-                        exc_info=True,
-                    )
-                    continue  # don't update state on failed command
-
-                # 9. Call action script on transition
+                # 4. Get previous state for transition detection
                 state = self._compressor_manager.get_state(gid)
                 prev_action = state.master_action if state else None
-                if new_action != prev_action and group.action_script:
-                    script_state = self.hass.states.get(group.action_script)
-                    if script_state is None:
-                        _LOGGER.warning(
-                            "Master group '%s': action script '%s' not found",
-                            group.name,
-                            group.action_script,
-                        )
-                    else:
-                        try:
-                            await self.hass.services.async_call(
-                                "script",
-                                "turn_on",
-                                {
-                                    "entity_id": group.action_script,
-                                    "variables": {
-                                        "action": new_action,
-                                        "master_entity": group.master_entity,
-                                        "members": group.members,
-                                        "active_members": [
-                                            eid for eid in group.members if state and eid in state.active_members
-                                        ],
-                                    },
-                                },
-                                blocking=False,
-                                context=make_roommind_context(),
-                            )
-                        except Exception:  # noqa: BLE001
-                            _LOGGER.warning(
-                                "Master group '%s': action script '%s' failed",
-                                group.name,
-                                group.action_script,
-                                exc_info=True,
-                            )
 
-                # 10. Update state + log transition
+                # 5. Control master climate entity (when configured)
+                if has_master:
+                    # Min-run/min-off guard: prevent master short-cycling
+                    if not self._compressor_manager.check_master_can_switch(gid, new_action):
+                        continue
+
+                    resolved_mode = self._resolve_master_hvac_mode(group.master_entity, new_action)
+
+                    # Skip when mode is unsupported
+                    if resolved_mode is None:
+                        if new_action != "idle":
+                            _LOGGER.warning(
+                                "Master '%s' (group '%s'): cannot resolve mode for action '%s', skipping",
+                                group.master_entity,
+                                group.name,
+                                new_action,
+                            )
+                        continue
+
+                    # Redundancy check — compare resolved mode with actual entity state
+                    if master_state is not None and master_state.state == resolved_mode:
+                        self._compressor_manager.set_master_action(gid, new_action)
+                        # Still call script if action changed
+                        if new_action != prev_action and group.action_script:
+                            await self._call_action_script(group, state, new_action)
+                        continue
+
+                    # Send climate command
+                    try:
+                        await self.hass.services.async_call(
+                            "climate",
+                            "set_hvac_mode",
+                            {
+                                "entity_id": group.master_entity,
+                                "hvac_mode": resolved_mode,
+                            },
+                            blocking=True,
+                            context=make_roommind_context(),
+                        )
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.warning(
+                            "Master '%s' (group '%s'): failed to set hvac_mode '%s'",
+                            group.master_entity,
+                            group.name,
+                            resolved_mode,
+                            exc_info=True,
+                        )
+                        continue  # don't update state on failed command
+
+                # 6. Call action script on transition
+                if new_action != prev_action and group.action_script:
+                    await self._call_action_script(group, state, new_action)
+
+                # 7. Update state + log transition
                 if new_action != prev_action:
+                    label = group.master_entity or group.action_script
                     _LOGGER.info(
                         "Master '%s' (group '%s'): %s -> %s",
-                        group.master_entity,
+                        label,
                         group.name,
                         prev_action,
                         new_action,
@@ -1500,3 +1485,42 @@ class RoomMindCoordinator(DataUpdateCoordinator):
                     group.name,
                     exc_info=True,
                 )
+
+    async def _call_action_script(
+        self,
+        group: CompressorGroupConfig,
+        state: CompressorGroupState | None,
+        new_action: str,
+    ) -> None:
+        """Call the group's action script with transition variables."""
+        script_state = self.hass.states.get(group.action_script)
+        if script_state is None:
+            _LOGGER.warning(
+                "Master group '%s': action script '%s' not found",
+                group.name,
+                group.action_script,
+            )
+            return
+        try:
+            await self.hass.services.async_call(
+                "script",
+                "turn_on",
+                {
+                    "entity_id": group.action_script,
+                    "variables": {
+                        "action": new_action,
+                        "master_entity": group.master_entity,
+                        "members": group.members,
+                        "active_members": [eid for eid in group.members if state and eid in state.active_members],
+                    },
+                },
+                blocking=False,
+                context=make_roommind_context(),
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning(
+                "Master group '%s': action script '%s' failed",
+                group.name,
+                group.action_script,
+                exc_info=True,
+            )
