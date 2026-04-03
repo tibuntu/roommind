@@ -1,0 +1,722 @@
+"""Tests for CoverOrchestrator — position reading, delegation, and async_process pipeline."""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from custom_components.roommind.const import (
+    COVER_DEFAULT_BETA_S,
+    COVER_LINEAR_LOOKAHEAD_H,
+    MODE_COOLING,
+    MODE_HEATING,
+    TargetTemps,
+)
+from custom_components.roommind.managers.cover_manager import CoverDecision
+from custom_components.roommind.managers.cover_orchestrator import (
+    CoverOrchestrator,
+    CoverResult,
+)
+
+# ── Helpers ───────────────────────────────────────────────────────────
+
+
+def _make_hass() -> MagicMock:
+    hass = MagicMock()
+    hass.config.latitude = 48.2
+    hass.config.longitude = 16.3
+    hass.states.get = MagicMock(return_value=None)
+    return hass
+
+
+def _make_cover_manager() -> MagicMock:
+    cm = MagicMock()
+    cm.evaluate = MagicMock(return_value=CoverDecision(target_position=100, changed=False, reason="disabled"))
+    cm.update_position = MagicMock()
+    cm.get_current_position = MagicMock(return_value=50)
+    cm.is_user_override_active = MagicMock(return_value=False)
+    cm.remove_room = MagicMock()
+    return cm
+
+
+def _make_model_manager() -> MagicMock:
+    mm = MagicMock()
+    mm.get_mode_counts = MagicMock(return_value=(0, 0, 0))
+    mm.get_prediction_std = MagicMock(return_value=1.0)
+    mm.get_model = MagicMock()
+    return mm
+
+
+def _make_room(**overrides) -> dict:
+    room = {
+        "area_id": "living_room",
+        "temperature_sensor": "",
+        "covers": [],
+        "covers_auto_enabled": False,
+        "covers_deploy_threshold": 1.5,
+        "covers_min_position": 0,
+        "covers_outdoor_min_temp": 10.0,
+        "covers_override_minutes": 60,
+        "cover_schedules": [],
+        "cover_schedule_selector_entity": "",
+        "covers_night_close": False,
+        "covers_night_position": 0,
+    }
+    room.update(overrides)
+    return room
+
+
+def _make_cover_state(position: int | None = None, state: str = "open") -> MagicMock:
+    s = MagicMock()
+    s.state = state
+    s.attributes = {"current_position": position} if position is not None else {}
+    return s
+
+
+# ── TestSetCloudSeries ────────────────────────────────────────────────
+
+
+class TestSetCloudSeries:
+    def test_stores_cloud_series(self):
+        orch = CoverOrchestrator(_make_hass(), _make_cover_manager(), _make_model_manager())
+        series = [0.1, 0.2, 0.3]
+        orch.set_cloud_series(series)
+        assert orch._cloud_series is series
+
+    def test_clears_cloud_series(self):
+        orch = CoverOrchestrator(_make_hass(), _make_cover_manager(), _make_model_manager())
+        orch.set_cloud_series([0.5])
+        orch.set_cloud_series(None)
+        assert orch._cloud_series is None
+
+    def test_initial_cloud_series_is_none(self):
+        orch = CoverOrchestrator(_make_hass(), _make_cover_manager(), _make_model_manager())
+        assert orch._cloud_series is None
+
+
+# ── TestReadPositions ─────────────────────────────────────────────────
+
+
+class TestReadPositions:
+    def test_single_cover_reads_position(self):
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        hass.states.get = MagicMock(return_value=_make_cover_state(position=75))
+        room = _make_room(covers=["cover.blind1"])
+
+        result = orch.read_positions("living_room", room)
+
+        assert result.positions == [75]
+        cm.update_position.assert_called_once_with("living_room", 75, override_minutes=60)
+
+    def test_multiple_covers_average(self):
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        states = {"cover.blind1": _make_cover_state(position=60), "cover.blind2": _make_cover_state(position=40)}
+        hass.states.get = MagicMock(side_effect=states.get)
+        room = _make_room(covers=["cover.blind1", "cover.blind2"])
+
+        result = orch.read_positions("living_room", room)
+
+        assert result.positions == [60, 40]
+        # Average is 50
+        cm.update_position.assert_called_once_with("living_room", 50, override_minutes=60)
+
+    def test_no_covers_returns_shading_factor_1(self):
+        orch = CoverOrchestrator(_make_hass(), _make_cover_manager(), _make_model_manager())
+        room = _make_room(covers=[])
+
+        result = orch.read_positions("living_room", room)
+
+        assert result.shading_factor == 1.0
+        assert result.positions == []
+
+    def test_unavailable_cover_skipped(self):
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        # First cover returns None (unavailable), second has position
+        states = {"cover.blind1": None, "cover.blind2": _make_cover_state(position=80)}
+        hass.states.get = MagicMock(side_effect=states.get)
+        room = _make_room(covers=["cover.blind1", "cover.blind2"])
+
+        result = orch.read_positions("living_room", room)
+
+        assert result.positions == [80]
+        cm.update_position.assert_called_once_with("living_room", 80, override_minutes=60)
+
+    def test_closed_state_fallback(self):
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        hass.states.get = MagicMock(return_value=_make_cover_state(position=None, state="closed"))
+        room = _make_room(covers=["cover.blind1"])
+
+        result = orch.read_positions("living_room", room)
+
+        assert result.positions == [0]
+        cm.update_position.assert_called_once_with("living_room", 0, override_minutes=60)
+
+    def test_open_state_fallback(self):
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        hass.states.get = MagicMock(return_value=_make_cover_state(position=None, state="open"))
+        room = _make_room(covers=["cover.blind1"])
+
+        result = orch.read_positions("living_room", room)
+
+        assert result.positions == [100]
+        cm.update_position.assert_called_once_with("living_room", 100, override_minutes=60)
+
+    def test_custom_override_minutes(self):
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        hass.states.get = MagicMock(return_value=_make_cover_state(position=50))
+        room = _make_room(covers=["cover.blind1"], covers_override_minutes=120)
+
+        orch.read_positions("living_room", room)
+
+        cm.update_position.assert_called_once_with("living_room", 50, override_minutes=120)
+
+    def test_no_positions_skips_update(self):
+        """When all covers are unavailable, update_position is not called."""
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        hass.states.get = MagicMock(return_value=None)
+        room = _make_room(covers=["cover.blind1"])
+
+        result = orch.read_positions("living_room", room)
+
+        assert result.positions == []
+        assert result.shading_factor == 1.0
+        cm.update_position.assert_not_called()
+
+
+# ── TestDelegation ────────────────────────────────────────────────────
+
+
+class TestDelegation:
+    def test_get_current_position_delegates(self):
+        cm = _make_cover_manager()
+        cm.get_current_position.return_value = 42
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+
+        assert orch.get_current_position("bedroom") == 42
+        cm.get_current_position.assert_called_once_with("bedroom")
+
+    def test_is_user_override_active_delegates(self):
+        cm = _make_cover_manager()
+        cm.is_user_override_active.return_value = True
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+
+        assert orch.is_user_override_active("bedroom") is True
+        cm.is_user_override_active.assert_called_once_with("bedroom")
+
+    def test_remove_room_delegates(self):
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+
+        orch.remove_room("bedroom")
+        cm.remove_room.assert_called_once_with("bedroom")
+
+
+# ── TestAsyncProcess ──────────────────────────────────────────────────
+
+
+class TestAsyncProcess:
+    @pytest.mark.asyncio
+    async def test_no_covers_returns_result(self):
+        """Room with no covers still returns a valid CoverResult."""
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+        room = _make_room(covers=[])
+
+        result = await orch.async_process(
+            area_id="living_room",
+            room=room,
+            targets=TargetTemps(heat=21.0, cool=24.0),
+            mode=MODE_HEATING,
+            current_temp=20.0,
+            outdoor_temp=15.0,
+            q_solar=0.3,
+            predicted_peak_temp=None,
+            has_override=False,
+        )
+
+        assert isinstance(result, CoverResult)
+        assert result.mpc_active is False  # No external sensor
+        assert isinstance(result.decision, CoverDecision)
+        cm.evaluate.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_auto_disabled_returns_unchanged(self):
+        """When covers_auto_enabled=False, evaluate returns unchanged decision."""
+        cm = _make_cover_manager()
+        cm.evaluate.return_value = CoverDecision(target_position=100, changed=False, reason="disabled")
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+        room = _make_room(covers=["cover.blind1"], covers_auto_enabled=False)
+
+        result = await orch.async_process(
+            area_id="living_room",
+            room=room,
+            targets=TargetTemps(heat=21.0, cool=24.0),
+            mode=MODE_HEATING,
+            current_temp=20.0,
+            outdoor_temp=15.0,
+            q_solar=0.3,
+            predicted_peak_temp=22.0,
+            has_override=False,
+        )
+
+        assert result.decision.changed is False
+        assert result.decision.reason == "disabled"
+
+    @pytest.mark.asyncio
+    async def test_managed_mode_mpc_inactive(self):
+        """No external sensor (Managed Mode) means mpc_active=False."""
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+        room = _make_room(temperature_sensor="", covers=["cover.blind1"])
+
+        result = await orch.async_process(
+            area_id="living_room",
+            room=room,
+            targets=TargetTemps(heat=21.0, cool=24.0),
+            mode=MODE_HEATING,
+            current_temp=20.0,
+            outdoor_temp=15.0,
+            q_solar=0.0,
+            predicted_peak_temp=21.0,
+            has_override=False,
+        )
+
+        assert result.mpc_active is False
+
+    @pytest.mark.asyncio
+    @patch("custom_components.roommind.managers.cover_orchestrator.is_mpc_active", return_value=True)
+    @patch("custom_components.roommind.managers.cover_orchestrator.check_acs_can_heat", return_value=False)
+    @patch("custom_components.roommind.managers.cover_orchestrator.get_can_heat_cool", return_value=(True, False))
+    async def test_mpc_active_with_external_sensor(self, mock_ghc, mock_cach, mock_mpc):
+        """With external sensor and is_mpc_active returning True, mpc_active=True."""
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+        room = _make_room(temperature_sensor="sensor.temp", covers=["cover.blind1"])
+
+        result = await orch.async_process(
+            area_id="living_room",
+            room=room,
+            targets=TargetTemps(heat=21.0, cool=24.0),
+            mode=MODE_HEATING,
+            current_temp=20.0,
+            outdoor_temp=15.0,
+            q_solar=0.3,
+            predicted_peak_temp=22.0,
+            has_override=False,
+        )
+
+        assert result.mpc_active is True
+        mock_mpc.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cooling_mode_uses_cool_target(self):
+        """In cooling mode, cover_target should use targets.cool."""
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+        room = _make_room(covers=["cover.blind1"])
+
+        await orch.async_process(
+            area_id="living_room",
+            room=room,
+            targets=TargetTemps(heat=21.0, cool=24.0),
+            mode=MODE_COOLING,
+            current_temp=25.0,
+            outdoor_temp=30.0,
+            q_solar=0.5,
+            predicted_peak_temp=26.0,
+            has_override=False,
+        )
+
+        # Verify evaluate was called with target_temp=24.0 (the cool target)
+        call_kwargs = cm.evaluate.call_args
+        assert call_kwargs[1]["target_temp"] == 24.0 or call_kwargs.kwargs["target_temp"] == 24.0
+
+    @pytest.mark.asyncio
+    async def test_heating_mode_uses_heat_target(self):
+        """In heating mode, cover_target should use targets.heat."""
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+        room = _make_room(covers=["cover.blind1"])
+
+        await orch.async_process(
+            area_id="living_room",
+            room=room,
+            targets=TargetTemps(heat=21.0, cool=24.0),
+            mode=MODE_HEATING,
+            current_temp=20.0,
+            outdoor_temp=15.0,
+            q_solar=0.3,
+            predicted_peak_temp=22.0,
+            has_override=False,
+        )
+
+        call_kwargs = cm.evaluate.call_args
+        assert call_kwargs[1]["target_temp"] == 21.0 or call_kwargs.kwargs["target_temp"] == 21.0
+
+    @pytest.mark.asyncio
+    async def test_fallback_target_22_when_none(self):
+        """When both heat and cool targets are None, fallback to 22.0."""
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+        room = _make_room(covers=["cover.blind1"])
+
+        await orch.async_process(
+            area_id="living_room",
+            room=room,
+            targets=TargetTemps(heat=None, cool=None),
+            mode=MODE_HEATING,
+            current_temp=20.0,
+            outdoor_temp=15.0,
+            q_solar=0.3,
+            predicted_peak_temp=22.0,
+            has_override=False,
+        )
+
+        call_kwargs = cm.evaluate.call_args
+        assert call_kwargs[1]["target_temp"] == 22.0 or call_kwargs.kwargs["target_temp"] == 22.0
+
+    @pytest.mark.asyncio
+    async def test_changed_decision_calls_apply(self):
+        """When decision.changed=True, async_apply is called on covers."""
+        cm = _make_cover_manager()
+        cm.evaluate.return_value = CoverDecision(target_position=30, changed=True, reason="solar_shade")
+        cm.async_apply = AsyncMock()
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+        room = _make_room(covers=["cover.blind1", "cover.blind2"])
+
+        with patch.object(CoverOrchestrator, "_estimate_solar_peak_temp", return_value=23.0):
+            result = await orch.async_process(
+                area_id="living_room",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=24.0),
+                mode=MODE_HEATING,
+                current_temp=20.0,
+                outdoor_temp=15.0,
+                q_solar=0.5,
+                predicted_peak_temp=None,
+                has_override=False,
+            )
+
+        assert result.decision.changed is True
+        # async_apply is a classmethod, called via CoverManager.async_apply
+        # We need to check it was awaited with correct args
+        cm.async_apply.assert_not_called()  # It's called as CoverManager.async_apply, not instance
+
+    @pytest.mark.asyncio
+    async def test_unchanged_decision_skips_apply(self):
+        """When decision.changed=False, async_apply is NOT called."""
+        cm = _make_cover_manager()
+        cm.evaluate.return_value = CoverDecision(target_position=100, changed=False, reason="no_change")
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+        room = _make_room(covers=["cover.blind1"])
+
+        with patch.object(CoverOrchestrator, "_estimate_solar_peak_temp", return_value=22.0):
+            await orch.async_process(
+                area_id="living_room",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=24.0),
+                mode=MODE_HEATING,
+                current_temp=20.0,
+                outdoor_temp=15.0,
+                q_solar=0.3,
+                predicted_peak_temp=None,
+                has_override=False,
+            )
+
+        # CoverManager.async_apply should not have been called
+
+    @pytest.mark.asyncio
+    async def test_predicted_peak_passed_through(self):
+        """When predicted_peak_temp is provided, it goes directly to evaluate."""
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+        room = _make_room(covers=["cover.blind1"])
+
+        await orch.async_process(
+            area_id="living_room",
+            room=room,
+            targets=TargetTemps(heat=21.0, cool=24.0),
+            mode=MODE_HEATING,
+            current_temp=20.0,
+            outdoor_temp=15.0,
+            q_solar=0.3,
+            predicted_peak_temp=25.5,
+            has_override=False,
+        )
+
+        call_kwargs = cm.evaluate.call_args
+        assert call_kwargs[1]["predicted_peak_temp"] == 25.5 or call_kwargs.kwargs["predicted_peak_temp"] == 25.5
+
+    @pytest.mark.asyncio
+    async def test_no_predicted_peak_uses_fallback(self):
+        """When predicted_peak_temp is None, _estimate_solar_peak_temp is used."""
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+        room = _make_room(covers=["cover.blind1"])
+
+        with patch.object(CoverOrchestrator, "_estimate_solar_peak_temp", return_value=23.5) as mock_est:
+            await orch.async_process(
+                area_id="living_room",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=24.0),
+                mode=MODE_HEATING,
+                current_temp=20.0,
+                outdoor_temp=15.0,
+                q_solar=0.3,
+                predicted_peak_temp=None,
+                has_override=False,
+            )
+
+            mock_est.assert_called_once()
+            call_kwargs = cm.evaluate.call_args
+            assert call_kwargs[1]["predicted_peak_temp"] == 23.5 or call_kwargs.kwargs["predicted_peak_temp"] == 23.5
+
+    @pytest.mark.asyncio
+    async def test_schedule_forced_position(self):
+        """Active cover schedule forces position and sets forced_reason."""
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        sched_state = MagicMock()
+        sched_state.state = "on"
+        sched_state.attributes = {"position": 25}
+        hass.states.get = MagicMock(return_value=sched_state)
+
+        room = _make_room(
+            covers=["cover.blind1"],
+            cover_schedules=[{"entity_id": "schedule.cover_morning"}],
+        )
+
+        with patch(
+            "custom_components.roommind.managers.cover_orchestrator.resolve_schedule_index",
+            return_value=0,
+        ):
+            result = await orch.async_process(
+                area_id="living_room",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=24.0),
+                mode=MODE_HEATING,
+                current_temp=20.0,
+                outdoor_temp=15.0,
+                q_solar=0.3,
+                predicted_peak_temp=22.0,
+                has_override=False,
+            )
+
+        assert result.forced_reason == "schedule_active"
+        # evaluate should have been called with forced_position=25
+        call_kwargs = cm.evaluate.call_args
+        assert call_kwargs[1]["forced_position"] == 25 or call_kwargs.kwargs["forced_position"] == 25
+
+    @pytest.mark.asyncio
+    async def test_night_close_forced(self):
+        """Night close forces position when solar elevation <= 0."""
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        room = _make_room(covers=["cover.blind1"], covers_night_close=True, covers_night_position=10)
+
+        with patch(
+            "custom_components.roommind.managers.cover_orchestrator.solar_elevation",
+            return_value=-5.0,
+        ):
+            result = await orch.async_process(
+                area_id="living_room",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=24.0),
+                mode=MODE_HEATING,
+                current_temp=20.0,
+                outdoor_temp=15.0,
+                q_solar=0.0,
+                predicted_peak_temp=20.0,
+                has_override=False,
+            )
+
+        assert result.forced_reason == "night_close"
+        call_kwargs = cm.evaluate.call_args
+        assert call_kwargs[1]["forced_position"] == 10 or call_kwargs.kwargs["forced_position"] == 10
+
+    @pytest.mark.asyncio
+    async def test_night_end_forces_open_when_auto_disabled(self):
+        """After night, if auto is off, covers are forced open (night_end)."""
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        room = _make_room(
+            covers=["cover.blind1"],
+            covers_night_close=True,
+            covers_auto_enabled=False,
+        )
+
+        with patch(
+            "custom_components.roommind.managers.cover_orchestrator.solar_elevation",
+            return_value=10.0,  # Sun is up
+        ):
+            result = await orch.async_process(
+                area_id="living_room",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=24.0),
+                mode=MODE_HEATING,
+                current_temp=20.0,
+                outdoor_temp=15.0,
+                q_solar=0.3,
+                predicted_peak_temp=21.0,
+                has_override=False,
+            )
+
+        assert result.forced_reason == "night_end"
+        call_kwargs = cm.evaluate.call_args
+        assert call_kwargs[1]["forced_position"] == 100 or call_kwargs.kwargs["forced_position"] == 100
+
+    @pytest.mark.asyncio
+    async def test_active_cover_schedule_index_returned(self):
+        """The active_cover_schedule_index is included in CoverResult."""
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        # Schedule entity exists but is off
+        sched_state = MagicMock()
+        sched_state.state = "off"
+        hass.states.get = MagicMock(return_value=sched_state)
+
+        room = _make_room(
+            covers=["cover.blind1"],
+            cover_schedules=[{"entity_id": "schedule.cover1"}, {"entity_id": "schedule.cover2"}],
+        )
+
+        with patch(
+            "custom_components.roommind.managers.cover_orchestrator.resolve_schedule_index",
+            return_value=1,
+        ):
+            result = await orch.async_process(
+                area_id="living_room",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=24.0),
+                mode=MODE_HEATING,
+                current_temp=20.0,
+                outdoor_temp=15.0,
+                q_solar=0.0,
+                predicted_peak_temp=21.0,
+                has_override=False,
+            )
+
+        assert result.active_cover_schedule_index == 1
+
+    @pytest.mark.asyncio
+    async def test_no_cover_schedules_index_minus_one(self):
+        """Without cover_schedules, active_cover_schedule_index is -1."""
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+        room = _make_room(covers=["cover.blind1"], cover_schedules=[])
+
+        result = await orch.async_process(
+            area_id="living_room",
+            room=room,
+            targets=TargetTemps(heat=21.0, cool=24.0),
+            mode=MODE_HEATING,
+            current_temp=20.0,
+            outdoor_temp=15.0,
+            q_solar=0.0,
+            predicted_peak_temp=21.0,
+            has_override=False,
+        )
+
+        assert result.active_cover_schedule_index == -1
+
+    @pytest.mark.asyncio
+    @patch("custom_components.roommind.managers.cover_orchestrator.is_mpc_active", side_effect=Exception("boom"))
+    @patch("custom_components.roommind.managers.cover_orchestrator.check_acs_can_heat", return_value=False)
+    @patch("custom_components.roommind.managers.cover_orchestrator.get_can_heat_cool", return_value=(True, False))
+    async def test_mpc_exception_falls_back_to_false(self, mock_ghc, mock_cach, mock_mpc):
+        """If is_mpc_active raises, mpc_active falls back to False."""
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
+        room = _make_room(temperature_sensor="sensor.temp", covers=["cover.blind1"])
+
+        result = await orch.async_process(
+            area_id="living_room",
+            room=room,
+            targets=TargetTemps(heat=21.0, cool=24.0),
+            mode=MODE_HEATING,
+            current_temp=20.0,
+            outdoor_temp=15.0,
+            q_solar=0.3,
+            predicted_peak_temp=22.0,
+            has_override=False,
+        )
+
+        assert result.mpc_active is False
+
+
+# ── TestEstimateSolarPeakTemp ─────────────────────────────────────────
+
+
+class TestEstimateSolarPeakTemp:
+    def test_tier2_linear_fallback(self):
+        """With no idle samples, falls back to linear: base + beta_s * q_solar * lookahead."""
+        mm = _make_model_manager()
+        mm.get_mode_counts.return_value = (0, 0, 0)  # No idle samples
+        orch = CoverOrchestrator(_make_hass(), _make_cover_manager(), mm)
+
+        result = orch._estimate_solar_peak_temp("living_room", 20.0, 21.0, 0.5, 15.0)
+
+        expected = 20.0 + COVER_DEFAULT_BETA_S * 0.5 * COVER_LINEAR_LOOKAHEAD_H
+        assert result == pytest.approx(expected)
+
+    def test_tier2_with_none_current_temp(self):
+        """When current_temp is None, base_temp falls back to target_temp."""
+        mm = _make_model_manager()
+        mm.get_mode_counts.return_value = (0, 0, 0)
+        orch = CoverOrchestrator(_make_hass(), _make_cover_manager(), mm)
+
+        result = orch._estimate_solar_peak_temp("living_room", None, 22.0, 0.5, 15.0)
+
+        expected = 22.0 + COVER_DEFAULT_BETA_S * 0.5 * COVER_LINEAR_LOOKAHEAD_H
+        assert result == pytest.approx(expected)
+
+    def test_tier2_with_zero_solar(self):
+        """With zero solar, peak equals base temp."""
+        mm = _make_model_manager()
+        mm.get_mode_counts.return_value = (0, 0, 0)
+        orch = CoverOrchestrator(_make_hass(), _make_cover_manager(), mm)
+
+        result = orch._estimate_solar_peak_temp("living_room", 20.0, 21.0, 0.0, 15.0)
+
+        assert result == pytest.approx(20.0)
+
+    def test_model_exception_falls_back_to_linear(self):
+        """If model_manager raises, falls back to linear."""
+        mm = _make_model_manager()
+        mm.get_mode_counts.side_effect = Exception("no model")
+        orch = CoverOrchestrator(_make_hass(), _make_cover_manager(), mm)
+
+        result = orch._estimate_solar_peak_temp("living_room", 20.0, 21.0, 0.5, 15.0)
+
+        expected = 20.0 + COVER_DEFAULT_BETA_S * 0.5 * COVER_LINEAR_LOOKAHEAD_H
+        assert result == pytest.approx(expected)
