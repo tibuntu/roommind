@@ -51,7 +51,7 @@ from .managers.compressor_group_manager import (
     CompressorGroupState,
     resolve_master_action,
 )
-from .managers.cover_orchestrator import CoverOrchestrator
+from .managers.cover_orchestrator import CoverOrchestrator, CoverResult
 from .managers.ekf_training_manager import EkfTrainingManager
 from .managers.heat_source_orchestrator import HeatSourcePlan, evaluate_heat_sources
 from .managers.mold_manager import MoldManager
@@ -811,9 +811,6 @@ class RoomMindCoordinator(DataUpdateCoordinator):
             self._mode_on_since.pop(area_id, None)
         self._previous_modes[area_id] = mode
 
-        # Reuse MPC active status computed by cover orchestrator
-        mpc_active = cover_result.mpc_active
-
         # Compute display mode: show actual device state when RoomMind doesn't
         # directly control the device, without affecting internal tracking
         # (residual heat, valve actuation, _previous_modes).  See #36, #69.
@@ -837,10 +834,74 @@ class RoomMindCoordinator(DataUpdateCoordinator):
                 display_mode = MODE_IDLE
                 display_pf = 0.0
 
+        return self._build_room_state_dict(
+            area_id=area_id,
+            room=room,
+            current_temp=current_temp,
+            current_temp_raw=current_temp_raw,
+            current_humidity=current_humidity,
+            target_temp=target_temp,
+            targets=targets,
+            display_mode=display_mode,
+            display_pf=display_pf,
+            heat_source_plan=heat_source_plan,
+            device_max_temp=device_max_temp,
+            ac_device_max_temp=ac_device_max_temp,
+            device_min_temp=device_min_temp,
+            has_external_sensor=has_external_sensor,
+            window_open=window_open,
+            presence_away=presence_away,
+            force_off=force_off,
+            mode=mode,
+            power_fraction=power_fraction,
+            mold_risk_level=mold_risk_level,
+            mold_surface_rh=mold_surface_rh,
+            mold_prevention_active_room=mold_prevention_active_room,
+            mold_prevention_temp_delta=mold_prevention_temp_delta,
+            shading_factor=shading_factor,
+            q_occupancy=q_occupancy,
+            cover_eids=cover_eids,
+            cover_result=cover_result,
+        )
+
+    def _build_room_state_dict(
+        self,
+        *,
+        area_id: str,
+        room: dict,
+        current_temp: float | None,
+        current_temp_raw: float | None,
+        current_humidity: float | None,
+        target_temp: float | None,
+        targets: TargetTemps,
+        display_mode: str,
+        display_pf: float,
+        heat_source_plan: HeatSourcePlan | None,
+        device_max_temp: float | None,
+        ac_device_max_temp: float | None,
+        device_min_temp: float | None,
+        has_external_sensor: bool,
+        window_open: bool,
+        presence_away: bool,
+        force_off: bool,
+        mode: str,
+        power_fraction: float,
+        mold_risk_level: str | None,
+        mold_surface_rh: float | None,
+        mold_prevention_active_room: bool,
+        mold_prevention_temp_delta: float,
+        shading_factor: float | None,
+        q_occupancy: float,
+        cover_eids: list[str],
+        cover_result: CoverResult,
+    ) -> dict:
+        """Build the final room state dictionary."""
         _room_devices = room.get("devices", [])
         _direct_eids = get_direct_setpoint_eids(_room_devices)
         _devs_with_eid = [d for d in _room_devices if d.get("entity_id")]
         _all_direct = bool(_devs_with_eid) and len(_direct_eids) == len(_devs_with_eid)
+
+        mpc_active = cover_result.mpc_active
 
         return {
             "area_id": area_id,
