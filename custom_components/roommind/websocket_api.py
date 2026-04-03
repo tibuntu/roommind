@@ -136,6 +136,31 @@ def _compute_anyone_home(hass: HomeAssistant, settings: dict) -> bool:
     return not is_presence_away(hass, {}, settings)  # all away
 
 
+def _validate_no_own_entities(config: dict, own_prefix: str) -> str | None:
+    """Check that no RoomMind-owned entities are assigned. Returns error message or None."""
+    for field in ("thermostats", "acs", "window_sensors", "covers", "occupancy_sensors"):
+        for eid in config.get(field, []):
+            if eid.split(".", 1)[-1].startswith(own_prefix):
+                return f"Cannot assign RoomMind's own entity '{eid}' to a room"
+    for device in config.get("devices", []):
+        eid = device.get("entity_id", "")
+        if eid.split(".", 1)[-1].startswith(own_prefix):
+            return f"Cannot assign RoomMind's own entity '{eid}' to a room"
+    for field in ("temperature_sensor", "humidity_sensor"):
+        eid = config.get(field, "")
+        if eid and eid.split(".", 1)[-1].startswith(own_prefix):
+            return f"Cannot assign RoomMind's own entity '{eid}' to a room"
+    return None
+
+
+def _validate_no_duplicate_devices(config: dict) -> str | None:
+    """Check for duplicate entity_ids in devices[]. Returns error message or None."""
+    device_eids = [d["entity_id"] for d in config.get("devices", [])]
+    if len(device_eids) != len(set(device_eids)):
+        return "devices[] contains duplicate entity_ids"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # List rooms
 # ---------------------------------------------------------------------------
@@ -307,42 +332,14 @@ async def websocket_save_room(
 
     # Reject RoomMind's own entities to prevent self-assignment (#86)
     own_prefix = f"{DOMAIN}_"
-    for field in ("thermostats", "acs", "window_sensors", "covers", "occupancy_sensors"):
-        for eid in config.get(field, []):
-            if eid.split(".", 1)[-1].startswith(own_prefix):
-                connection.send_error(
-                    msg["id"],
-                    "invalid_entity",
-                    f"Cannot assign RoomMind's own entity '{eid}' to a room",
-                )
-                return
-    for device in config.get("devices", []):
-        eid = device.get("entity_id", "")
-        if eid.split(".", 1)[-1].startswith(own_prefix):
-            connection.send_error(
-                msg["id"],
-                "invalid_entity",
-                f"Cannot assign RoomMind's own entity '{eid}' to a room",
-            )
-            return
-    for field in ("temperature_sensor", "humidity_sensor"):
-        eid = config.get(field, "")
-        if eid and eid.split(".", 1)[-1].startswith(own_prefix):
-            connection.send_error(
-                msg["id"],
-                "invalid_entity",
-                f"Cannot assign RoomMind's own entity '{eid}' to a room",
-            )
-            return
-
+    err = _validate_no_own_entities(config, own_prefix)
+    if err:
+        connection.send_error(msg["id"], "invalid_entity", err)
+        return
     # Reject duplicate entity_ids in devices[]
-    device_eids = [d["entity_id"] for d in config.get("devices", [])]
-    if len(device_eids) != len(set(device_eids)):
-        connection.send_error(
-            msg["id"],
-            "duplicate_entity",
-            "devices[] contains duplicate entity_ids",
-        )
+    err = _validate_no_duplicate_devices(config)
+    if err:
+        connection.send_error(msg["id"], "duplicate_entity", err)
         return
 
     if ("thermostats" in config or "acs" in config) and "devices" not in config:
