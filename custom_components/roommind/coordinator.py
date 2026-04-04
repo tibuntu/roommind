@@ -1456,10 +1456,10 @@ class RoomMindCoordinator(DataUpdateCoordinator):
 
     def reset_thermal_all(self) -> list[str]:
         """Reset all thermal models. Returns list of affected room IDs."""
-        room_ids = list(self._model_manager._estimators.keys())
+        room_ids = self._model_manager.get_room_ids()
         self._model_manager = RoomModelManager()
-        self._ekf_training._model_manager = self._model_manager
-        self._cover_orchestrator._model_manager = self._model_manager
+        self._ekf_training.set_model_manager(self._model_manager)
+        self._cover_orchestrator.set_model_manager(self._model_manager)
         self._ekf_training.last_temps.clear()
         self._residual_tracker.clear_all()
         return room_ids

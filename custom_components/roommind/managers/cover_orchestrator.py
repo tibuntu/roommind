@@ -68,6 +68,10 @@ class CoverOrchestrator:
         self._model_manager = model_manager
         self._cloud_series: list[float | None] | None = None
 
+    def set_model_manager(self, model_manager: RoomModelManager) -> None:
+        """Update the model manager reference (used after full thermal reset)."""
+        self._model_manager = model_manager
+
     def set_cloud_series(self, cloud_series: list[float | None] | None) -> None:
         """Update cloud forecast for solar trajectory prediction."""
         self._cloud_series = cloud_series

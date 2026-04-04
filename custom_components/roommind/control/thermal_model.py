@@ -930,6 +930,10 @@ class RoomModelManager:
     def __init__(self) -> None:
         self._estimators: dict[str, ThermalEKF] = {}
 
+    def get_room_ids(self) -> list[str]:
+        """Return list of room IDs with learned models."""
+        return list(self._estimators.keys())
+
     def get_estimator(self, area_id: str) -> ThermalEKF:
         """Return the estimator for *area_id*, creating one if needed."""
         if area_id not in self._estimators:
