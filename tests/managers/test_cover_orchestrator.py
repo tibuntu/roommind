@@ -398,11 +398,11 @@ class TestAsyncProcess:
         assert call_kwargs[1]["target_temp"] == 22.0 or call_kwargs.kwargs["target_temp"] == 22.0
 
     @pytest.mark.asyncio
-    async def test_changed_decision_calls_apply(self):
+    @patch("custom_components.roommind.managers.cover_orchestrator.CoverManager.async_apply", new_callable=AsyncMock)
+    async def test_changed_decision_calls_apply(self, mock_apply):
         """When decision.changed=True, async_apply is called on covers."""
         cm = _make_cover_manager()
         cm.evaluate.return_value = CoverDecision(target_position=30, changed=True, reason="solar_shade")
-        cm.async_apply = AsyncMock()
         orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
         room = _make_room(covers=["cover.blind1", "cover.blind2"])
 
@@ -420,9 +420,7 @@ class TestAsyncProcess:
             )
 
         assert result.decision.changed is True
-        # async_apply is a classmethod, called via CoverManager.async_apply
-        # We need to check it was awaited with correct args
-        cm.async_apply.assert_not_called()  # It's called as CoverManager.async_apply, not instance
+        mock_apply.assert_awaited_once_with(orch.hass, ["cover.blind1", "cover.blind2"], 30)
 
     @pytest.mark.asyncio
     async def test_unchanged_decision_skips_apply(self):

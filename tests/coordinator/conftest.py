@@ -18,6 +18,10 @@ SAMPLE_ROOM = {
     "schedule_selector_entity": "",
     "comfort_temp": 21.0,
     "eco_temp": 17.0,
+    "comfort_heat": 21.0,
+    "comfort_cool": 24.0,
+    "eco_heat": 17.0,
+    "eco_cool": 27.0,
     "occupancy_sensors": [],
 }
 
