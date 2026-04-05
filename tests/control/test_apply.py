@@ -872,6 +872,28 @@ async def test_turn_off_set_hvac_mode_exception():
 
 
 @pytest.mark.asyncio
+async def test_turn_off_defense_in_depth_set_temperature_exception():
+    """Exception in defense-in-depth set_temperature is silently caught; set_hvac_mode(off) still sent."""
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {"hvac_modes": ["heat", "off"], "min_temp": 5.0, "temperature": 25.0}
+    hass.states.get = MagicMock(return_value=state)
+
+    # Only set_temperature raises; set_hvac_mode should still go through
+    async def selective_raise(domain, service, data, **kwargs):
+        if service == "set_temperature":
+            raise RuntimeError("device busy")
+
+    hass.services.async_call = AsyncMock(side_effect=selective_raise)
+
+    # Should not raise; set_hvac_mode(off) should still be called
+    await async_turn_off_climate(hass, "climate.trv1", area_id="room_a")
+    calls = [c[0][1] for c in hass.services.async_call.call_args_list]
+    assert "set_hvac_mode" in calls
+
+
+@pytest.mark.asyncio
 async def test_turn_off_fallback_set_temperature_exception():
     """Exception in fallback set_temperature is caught."""
     hass = build_hass()
@@ -1847,7 +1869,13 @@ async def test_turn_off_cache_fallback():
 
 @pytest.mark.asyncio
 async def test_turn_off_cache_updated():
-    """async_turn_off_climate updates cache; last command is set_temperature(min_temp) due to defense-in-depth."""
+    """Final cache entry after async_turn_off_climate is set_hvac_mode(off).
+
+    With the reordering fix, set_temperature(min_temp) is sent first (device is
+    still in heat mode and processes it), then set_hvac_mode(off) becomes the
+    final cache entry — which is exactly what the IR-device early-return check
+    looks for (service="set_hvac_mode", hvac_mode="off").
+    """
     hass = build_hass()
     state = MagicMock()
     state.state = "heat"
@@ -1856,9 +1884,63 @@ async def test_turn_off_cache_updated():
 
     await async_turn_off_climate(hass, "climate.ac")
     assert "climate.ac" in _last_commands
-    # Last command is set_temperature (defense-in-depth overwrites the set_hvac_mode cache entry)
-    assert _last_commands["climate.ac"]["service"] == "set_temperature"
-    assert _last_commands["climate.ac"]["temperature"] == 5.0
+    assert hass.services.async_call.call_count == 2
+    # Final cache entry is set_hvac_mode(off) — enables IR-device early-return on subsequent calls
+    assert _last_commands["climate.ac"]["service"] == "set_hvac_mode"
+    assert _last_commands["climate.ac"]["hvac_mode"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_turn_off_call_order_set_temperature_before_set_hvac_mode():
+    """set_temperature(min_temp) must be the FIRST call, set_hvac_mode(off) the SECOND.
+
+    This ordering is required for Wavin AHC9000 and similar devices that only
+    process temperature changes while still in heat mode.  Sending set_temperature
+    first (while the device is active) ensures the valve closes even if
+    set_hvac_mode(off) is later ignored by the firmware.  This test pins the
+    invariant introduced in PR #160 so that any future refactor accidentally
+    reversing the order is caught immediately.
+    """
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {"hvac_modes": ["heat", "off"], "min_temp": 5.0, "temperature": 25.0}
+    hass.states.get = MagicMock(return_value=state)
+
+    await async_turn_off_climate(hass, "climate.trv")
+
+    calls = hass.services.async_call.call_args_list
+    assert len(calls) == 2
+    assert calls[0][0][1] == "set_temperature", (
+        "First service call must be set_temperature — device must receive setpoint while still in heat mode"
+    )
+    assert calls[1][0][1] == "set_hvac_mode", "Second service call must be set_hvac_mode(off)"
+
+
+@pytest.mark.asyncio
+async def test_turn_off_ir_device_second_call_skipped_via_cache():
+    """IR device: after first call, cache has set_hvac_mode(off) → second call skipped.
+
+    Verifies that the reordered cache state (set_hvac_mode as final entry) correctly
+    enables the IR-device early-return check on subsequent calls.  With the old
+    order the final cache entry was set_temperature, so the early-return was never
+    triggered and both commands were re-sent on every coordinator cycle.
+    """
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "unavailable"
+    state.attributes = {"hvac_modes": ["heat", "off"], "min_temp": 5.0, "temperature": None}
+    hass.states.get = MagicMock(return_value=state)
+
+    # First call: both set_temperature(5.0) and set_hvac_mode(off) are sent
+    await async_turn_off_climate(hass, "climate.ir_ac")
+    assert hass.services.async_call.call_count == 2
+    assert _last_commands["climate.ir_ac"]["service"] == "set_hvac_mode"
+    assert _last_commands["climate.ir_ac"]["hvac_mode"] == "off"
+
+    # Second call: cache says set_hvac_mode(off) → early return, no new calls
+    await async_turn_off_climate(hass, "climate.ir_ac")
+    assert hass.services.async_call.call_count == 2  # unchanged
 
 
 @pytest.mark.asyncio
@@ -2018,6 +2100,37 @@ async def test_turn_off_normal_path_cache_not_updated_on_exception():
 
     await async_turn_off_climate(hass, "climate.ac", area_id="living")
     assert "climate.ac" not in _last_commands
+
+
+@pytest.mark.asyncio
+async def test_turn_off_partial_failure_set_hvac_mode_exception_cache_reflects_set_temperature():
+    """set_temperature succeeds but set_hvac_mode(off) raises: cache stays at set_temperature.
+
+    If set_hvac_mode fails (e.g. transient network error), the cache must NOT
+    show set_hvac_mode(off).  On the next coordinator cycle the IR-device early-
+    return check does not fire (cache service != "set_hvac_mode"), so the turn-off
+    sequence is retried — which is the desired behaviour.
+    """
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {"hvac_modes": ["heat", "off"], "min_temp": 5.0, "temperature": 25.0}
+    hass.states.get = MagicMock(return_value=state)
+
+    async def fail_hvac_mode(*args, **kwargs):
+        if args[1] == "set_hvac_mode":
+            raise Exception("connection lost")
+
+    hass.services.async_call = AsyncMock(side_effect=fail_hvac_mode)
+
+    await async_turn_off_climate(hass, "climate.trv", area_id="living")
+
+    # Both service calls were attempted
+    assert hass.services.async_call.call_count == 2
+    # Cache reflects the successful set_temperature call — NOT set_hvac_mode(off)
+    assert "climate.trv" in _last_commands
+    assert _last_commands["climate.trv"]["service"] == "set_temperature"
+    assert _last_commands["climate.trv"]["temperature"] == 5.0
 
 
 @pytest.mark.asyncio
@@ -2360,6 +2473,40 @@ async def test_turn_off_sends_temperature_when_device_ignores_off():
         blocking=True,
         context=ANY,
     )
+
+
+@pytest.mark.asyncio
+async def test_turn_off_wavin_ahc9000_realistic_hvac_modes():
+    """Wavin AHC9000 realistic scenario: hvac_modes=['heat', 'off'], device in heat mode.
+
+    The Wavin AHC9000 reports both 'heat' and 'off' in hvac_modes but ignores
+    set_temperature commands when already in standby/off mode.  Sending
+    set_temperature(min_temp) while still in 'heat' mode (before set_hvac_mode)
+    ensures the valve physically closes.  This test uses the actual Wavin device
+    attributes (not the simplified ['off']-only variant) to prevent regression
+    against the real device profile.
+    """
+    hass = build_hass()
+    state = MagicMock()
+    state.state = "heat"
+    state.attributes = {
+        "hvac_modes": ["heat", "off"],
+        "min_temp": 5.0,
+        "max_temp": 35.0,
+        "temperature": 21.0,
+    }
+    hass.states.get = MagicMock(return_value=state)
+
+    await async_turn_off_climate(hass, "climate.wavin_ahc9000", area_id="bathroom")
+
+    calls = hass.services.async_call.call_args_list
+    assert len(calls) == 2
+    # Setpoint lowered first — while device is still in heat mode (Wavin fix)
+    assert calls[0][0][1] == "set_temperature"
+    assert calls[0][0][2]["temperature"] == 5.0
+    # Mode changed to off second
+    assert calls[1][0][1] == "set_hvac_mode"
+    assert calls[1][0][2]["hvac_mode"] == "off"
 
 
 # ---------------------------------------------------------------------------

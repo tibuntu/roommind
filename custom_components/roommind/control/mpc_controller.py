@@ -115,27 +115,11 @@ async def async_turn_off_climate(
             cached = _last_commands.get(entity_id)
             if cached and cached.get("service") == "set_hvac_mode" and cached.get("hvac_mode") == "off":
                 return
-        try:
-            await hass.services.async_call(
-                "climate",
-                "set_hvac_mode",
-                {"entity_id": entity_id, "hvac_mode": "off"},
-                blocking=True,
-                context=make_roommind_context(),
-            )
-            _last_commands[entity_id] = _cache_entry("set_hvac_mode", {"hvac_mode": "off"})
-        except Exception:  # noqa: BLE001
-            _LOGGER.warning(
-                "Area '%s': climate.set_hvac_mode(off) failed on '%s'",
-                area_id,
-                entity_id,
-                exc_info=True,
-            )
-
-        # Defense-in-depth: also lower setpoint to min_temp.
+        # Defense-in-depth: lower setpoint to min_temp BEFORE sending "off".
         # Some devices (e.g. Wavin AHC9000) claim "off" support but only
-        # respond to temperature changes.  Lowering the setpoint ensures
-        # the valve closes even if set_hvac_mode(off) was silently ignored.
+        # process temperature changes when in "heat" mode.  Sending the setpoint
+        # first (while the device is still active) ensures the valve closes even
+        # if set_hvac_mode(off) is later ignored.
         if state:
             min_temp = state.attributes.get("min_temp")
             if min_temp is not None:
@@ -161,7 +145,24 @@ async def async_turn_off_climate(
                             )
                             _last_commands[entity_id] = _cache_entry("set_temperature", {"temperature": min_temp_f})
                         except Exception:  # noqa: BLE001
-                            pass  # Best-effort, off command was already sent/attempted
+                            pass  # Best-effort; set_hvac_mode(off) will follow
+
+        try:
+            await hass.services.async_call(
+                "climate",
+                "set_hvac_mode",
+                {"entity_id": entity_id, "hvac_mode": "off"},
+                blocking=True,
+                context=make_roommind_context(),
+            )
+            _last_commands[entity_id] = _cache_entry("set_hvac_mode", {"hvac_mode": "off"})
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning(
+                "Area '%s': climate.set_hvac_mode(off) failed on '%s'",
+                area_id,
+                entity_id,
+                exc_info=True,
+            )
         return
 
     # Fallback: device does not support "off" → set to min_temp / max_temp
