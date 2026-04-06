@@ -21,7 +21,7 @@ from ..const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-def _find_active_block(schedule_blocks: dict, ts: float) -> dict[str, Any] | None:
+def find_active_block(schedule_blocks: dict, ts: float) -> dict[str, Any] | None:
     """Find the schedule block active at the given timestamp.
 
     Returns the block's ``data`` dict, or None if no block matches.
@@ -73,7 +73,7 @@ def resolve_target_at_time(
     # 3. Schedule blocks
     if schedule_blocks is None:
         return comfort_temp
-    data = _find_active_block(schedule_blocks, ts)
+    data = find_active_block(schedule_blocks, ts)
     if data is not None:
         block_temp = data.get("temperature")
         if block_temp is not None:
@@ -125,7 +125,7 @@ def resolve_targets_at_time(
     # 3. Schedule blocks
     if schedule_blocks is None:
         return TargetTemps(heat=comfort_heat, cool=comfort_cool)
-    data = _find_active_block(schedule_blocks, ts)
+    data = find_active_block(schedule_blocks, ts)
     if data is not None:
         heat_temp_raw = data.get("heat_temperature")
         cool_temp_raw = data.get("cool_temperature")

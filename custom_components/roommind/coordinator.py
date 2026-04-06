@@ -439,9 +439,19 @@ class RoomMindCoordinator(DataUpdateCoordinator):
             mold_prevention_temp_delta,
         ) = await self._evaluate_mold_risk(area_id, current_temp, current_humidity, settings)
 
+        # Load schedule blocks once — used for both target temp resolution and MPC lookahead.
+        from .utils.schedule_utils import (
+            get_active_schedule_entity,
+            make_target_resolver,
+            read_schedule_blocks,
+        )
+
+        schedule_entity_id = get_active_schedule_entity(self.hass, room)
+        schedule_blocks = await read_schedule_blocks(self.hass, schedule_entity_id) if schedule_entity_id else None
+
         # Determine dual heat/cool target temperatures
         # Returns TargetTemps(heat, cool). None values mean "force off".
-        targets = self._resolve_target_temps(room, settings)
+        targets = self._resolve_target_temps(room, settings, schedule_blocks, schedule_entity_id)
 
         # Apply mold prevention temperature delta (heating target only).
         # Safety: mold prevention overrides "off" to prevent structural damage.
@@ -460,12 +470,6 @@ class RoomMindCoordinator(DataUpdateCoordinator):
                     heat=targets.heat + mold_prevention_temp_delta,
                     cool=targets.cool,
                 )
-
-        # Read schedule blocks for MPC lookahead (pre-heating/pre-cooling)
-        from .utils.schedule_utils import get_active_schedule_entity, make_target_resolver, read_schedule_blocks
-
-        schedule_entity_id = get_active_schedule_entity(self.hass, room)
-        schedule_blocks = await read_schedule_blocks(self.hass, schedule_entity_id) if schedule_entity_id else None
         presence_away = not room.get("ignore_presence", False) and self._is_presence_away(room, settings)
         target_resolver = make_target_resolver(
             schedule_blocks,
@@ -1190,12 +1194,20 @@ class RoomMindCoordinator(DataUpdateCoordinator):
 
         return resolve_schedule_index(self.hass, room)
 
-    def _resolve_target_temps(self, room: dict, settings: dict) -> TargetTemps:
+    def _resolve_target_temps(
+        self,
+        room: dict,
+        settings: dict,
+        schedule_blocks: dict | None = None,
+        schedule_entity_id: str | None = None,
+    ) -> TargetTemps:
         """Resolve dual heat/cool target temperatures.
 
         Priority: override > vacation > presence away > schedule block temp > comfort/eco.
         Returns TargetTemps(heat, cool). None values mean "force off".
         """
+        from .utils.schedule_utils import find_active_block
+
         # 1. Override — single-point target
         override_temp = room.get("override_temp")
         override_until = room.get("override_until")
@@ -1251,13 +1263,8 @@ class RoomMindCoordinator(DataUpdateCoordinator):
         eco_heat = room.get("eco_heat", room.get("eco_temp", DEFAULT_ECO_HEAT))
         eco_cool = room.get("eco_cool", DEFAULT_ECO_COOL)
 
-        idx = self._get_active_schedule_index(room)
-        if idx < 0:
-            return TargetTemps(heat=comfort_heat, cool=comfort_cool)
-
-        schedules = room.get("schedules", [])
-        schedule_entity_id = schedules[idx].get("entity_id", "")
-
+        # schedule_entity_id is pre-resolved by the caller (_async_process_room) to avoid
+        # a second resolve_schedule_index() call that could diverge if selector state changes.
         if not schedule_entity_id:
             return TargetTemps(heat=comfort_heat, cool=comfort_cool)
 
@@ -1266,9 +1273,21 @@ class RoomMindCoordinator(DataUpdateCoordinator):
             return TargetTemps(heat=comfort_heat, cool=comfort_cool)
 
         if state.state == SCHEDULE_STATE_ON:
-            # Check for split heat/cool temps first
-            heat_temp = state.attributes.get("heat_temperature")
-            cool_temp = state.attributes.get("cool_temperature")
+            if schedule_blocks is not None:
+                # Read all temperature fields from block data.
+                # HA does not expose custom data keys (heat_temperature, cool_temperature)
+                # as entity state attributes, so schedule.get_schedule is required.
+                block_data = find_active_block(schedule_blocks, time.time()) or {}
+                heat_temp = block_data.get("heat_temperature")
+                cool_temp = block_data.get("cool_temperature")
+                block_temp = block_data.get("temperature")
+            else:
+                # Fallback when schedule.get_schedule is unavailable (non-schedule.* entity
+                # or service failure). Works for temperature; heat/cool split will not resolve.
+                heat_temp = state.attributes.get("heat_temperature")
+                cool_temp = state.attributes.get("cool_temperature")
+                block_temp = state.attributes.get("temperature")
+
             if heat_temp is not None or cool_temp is not None:
                 h = comfort_heat
                 c = comfort_cool
@@ -1283,7 +1302,6 @@ class RoomMindCoordinator(DataUpdateCoordinator):
                     except (ValueError, TypeError):
                         pass
                 return TargetTemps(heat=h, cool=c)
-            block_temp = state.attributes.get("temperature")
             if block_temp is not None:
                 try:
                     t = ha_temp_to_celsius(self.hass, float(block_temp))
