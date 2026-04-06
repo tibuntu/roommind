@@ -53,7 +53,7 @@ def _make_room(**overrides) -> dict:
         "area_id": "living_room",
         "temperature_sensor": "",
         "covers": [],
-        "covers_auto_enabled": False,
+        "covers_auto_enabled": True,
         "covers_deploy_threshold": 1.5,
         "covers_min_position": 0,
         "covers_outdoor_min_temp": 10.0,
@@ -263,9 +263,8 @@ class TestAsyncProcess:
 
     @pytest.mark.asyncio
     async def test_auto_disabled_returns_unchanged(self):
-        """When covers_auto_enabled=False, evaluate returns unchanged decision."""
+        """When covers_auto_enabled=False, process returns no-op without calling evaluate."""
         cm = _make_cover_manager()
-        cm.evaluate.return_value = CoverDecision(target_position=100, changed=False, reason="disabled")
         orch = CoverOrchestrator(_make_hass(), cm, _make_model_manager())
         room = _make_room(covers=["cover.blind1"], covers_auto_enabled=False)
 
@@ -283,6 +282,8 @@ class TestAsyncProcess:
 
         assert result.decision.changed is False
         assert result.decision.reason == "disabled"
+        assert result.forced_reason == ""
+        cm.evaluate.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_managed_mode_mpc_inactive(self):
@@ -559,8 +560,8 @@ class TestAsyncProcess:
         assert call_kwargs[1]["forced_position"] == 10 or call_kwargs.kwargs["forced_position"] == 10
 
     @pytest.mark.asyncio
-    async def test_night_end_forces_open_when_auto_disabled(self):
-        """After night, if auto is off, covers are forced open (night_end)."""
+    async def test_auto_disabled_no_action_regardless_of_night_close(self):
+        """When auto is disabled, covers are not moved even if night just ended."""
         hass = _make_hass()
         cm = _make_cover_manager()
         orch = CoverOrchestrator(hass, cm, _make_model_manager())
@@ -587,9 +588,49 @@ class TestAsyncProcess:
                 has_override=False,
             )
 
-        assert result.forced_reason == "night_end"
-        call_kwargs = cm.evaluate.call_args
-        assert call_kwargs[1]["forced_position"] == 100 or call_kwargs.kwargs["forced_position"] == 100
+        assert result.decision.changed is False
+        assert result.decision.reason == "disabled"
+        assert result.forced_reason == ""
+        cm.evaluate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_schedule_ignored_when_auto_disabled(self):
+        """Active schedule does not control covers when covers_auto_enabled=False."""
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        sched_state = MagicMock()
+        sched_state.state = "on"
+        sched_state.attributes = {"position": 25}
+        hass.states.get = MagicMock(return_value=sched_state)
+
+        room = _make_room(
+            covers=["cover.blind1"],
+            covers_auto_enabled=False,
+            cover_schedules=[{"entity_id": "schedule.blind_plan"}],
+        )
+
+        with patch(
+            "custom_components.roommind.managers.cover_orchestrator.resolve_schedule_index",
+            return_value=0,
+        ):
+            result = await orch.async_process(
+                area_id="living_room",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=24.0),
+                mode=MODE_HEATING,
+                current_temp=20.0,
+                outdoor_temp=15.0,
+                q_solar=0.3,
+                predicted_peak_temp=22.0,
+                has_override=False,
+            )
+
+        assert result.decision.changed is False
+        assert result.decision.reason == "disabled"
+        assert result.forced_reason == ""
+        cm.evaluate.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_active_cover_schedule_index_returned(self):

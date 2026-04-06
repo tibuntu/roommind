@@ -15,6 +15,7 @@ from ..const import (
     COVER_POS_DEADBAND,
     COVER_POS_SCALE,
     COVER_SOLAR_MIN,
+    COVER_TRANSITION_SETTLE_S,
     COVER_USER_CONFLICT_THRESHOLD,
     COVER_USER_OVERRIDE_MINUTES,
 )
@@ -58,6 +59,7 @@ class _RoomCoverState:
     last_commanded_position: int | None = None  # None = never commanded yet
     user_override_until: float = 0.0  # Unix timestamp; 0 = no override
     last_was_forced: bool = False  # True after forced position (schedule/night close)
+    last_command_ts: float = 0.0  # timestamp of last issued command (for transit settling)
 
 
 class CoverManager:
@@ -83,10 +85,12 @@ class CoverManager:
         """
         state = self._get_state(area_id)
         # Drift detection: only on actual position change when we previously commanded a position
+        # and the transition settling period has elapsed (avoids false positives from in-transit positions).
         if (
             position != state.current_position
             and state.last_commanded_position is not None
             and abs(position - state.last_commanded_position) > COVER_USER_CONFLICT_THRESHOLD
+            and (time.time() - state.last_command_ts) >= COVER_TRANSITION_SETTLE_S
         ):
             state.user_override_until = time.time() + override_minutes * 60
             _LOGGER.info(
@@ -267,4 +271,5 @@ class CoverManager:
         state.current_position = position
         state.last_commanded_position = position
         state.last_change_ts = time.time()
+        state.last_command_ts = time.time()
         return CoverDecision(target_position=position, changed=True, reason=reason)

@@ -16,6 +16,7 @@ from custom_components.roommind.const import (
     COVER_PREDICTION_DT_MINUTES,
     COVER_RC_LOOKAHEAD_H,
     COVER_SOLAR_MIN,
+    COVER_TRANSITION_SETTLE_S,
     COVER_USER_CONFLICT_THRESHOLD,
     COVER_USER_OVERRIDE_MINUTES,
 )
@@ -300,6 +301,36 @@ def test_override_duration_zero_means_no_pause():
         # user_override_until = 1100.0 + 0 = 1100.0, which is <= time.time()
         mock_t.time.return_value = 1100.0
         assert not mgr.is_user_override_active("lr")
+
+
+def test_override_not_triggered_during_cover_transit():
+    """No override detection while cover is physically moving toward commanded position."""
+    mgr = CoverManager()
+    with patch("custom_components.roommind.managers.cover_manager.time") as mock_t:
+        mock_t.time.return_value = 1000.0
+        # RoomMind commands cover to position ~25 (high solar)
+        d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0, **_BASE_KWARGS)
+        assert d.changed is True
+
+        # Cover is still in transit (e.g. moving from 100 → 25, reports 60 after 30s)
+        mock_t.time.return_value = 1030.0  # within COVER_TRANSITION_SETTLE_S=90
+        mgr.update_position("lr", 60)
+        state = mgr._get_state("lr")
+        assert state.user_override_until == 0.0  # no false override during transit
+
+
+def test_override_triggered_after_settle_window():
+    """Override detection activates once the settling period has elapsed."""
+    mgr = CoverManager()
+    with patch("custom_components.roommind.managers.cover_manager.time") as mock_t:
+        mock_t.time.return_value = 1000.0
+        mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0, **_BASE_KWARGS)
+
+        # User manually opens cover well after the settle window
+        mock_t.time.return_value = 1000.0 + COVER_TRANSITION_SETTLE_S + 10
+        mgr.update_position("lr", 100)
+        state = mgr._get_state("lr")
+        assert state.user_override_until > 0.0  # override correctly detected
 
 
 def test_low_solar_retract_respects_hold_time():

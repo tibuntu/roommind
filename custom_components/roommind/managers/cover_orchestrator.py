@@ -115,6 +115,20 @@ class CoverOrchestrator:
         has_override: bool,
     ) -> CoverResult:
         """Process cover control for a room: MPC check, schedule, prediction, evaluate, apply."""
+        # Early exit: when auto control is disabled, do nothing.
+        # Schedule, night close and MPC are all suppressed — covers stay wherever they are.
+        if not room.get("covers_auto_enabled", False):
+            return CoverResult(
+                mpc_active=False,
+                forced_reason="",
+                active_cover_schedule_index=-1,
+                decision=CoverDecision(
+                    target_position=self._cover_manager.get_current_position(area_id),
+                    changed=False,
+                    reason="disabled",
+                ),
+            )
+
         has_external_sensor = bool(room.get("temperature_sensor"))
 
         # Block A: MPC active check
@@ -182,11 +196,6 @@ class CoverOrchestrator:
             if _elev <= 0:
                 _forced_position = room.get("covers_night_position", 0)
                 _forced_reason = "night_close"
-            elif not room.get("covers_auto_enabled", False):
-                # Sun is up but auto control is off → force open so covers
-                # don't stay closed after night close (no solar logic to reopen).
-                _forced_position = 100
-                _forced_reason = "night_end"
 
         # Block D: Tiered prediction
         _cover_predicted_peak = predicted_peak_temp

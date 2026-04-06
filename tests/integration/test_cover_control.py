@@ -131,6 +131,7 @@ class TestCoverIntegration:
         # Simulate auto having commanded position 30 (both state fields must match)
         coordinator._cover_manager._states["living_room"].last_commanded_position = 30
         coordinator._cover_manager._states["living_room"].current_position = 30
+        coordinator._cover_manager._states["living_room"].last_command_ts = 0.0  # settle window past
 
         # Second cycle: user opened cover to 100 (simulating manual override)
         coordinator.hass.states.get = MagicMock(
