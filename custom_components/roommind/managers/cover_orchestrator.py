@@ -166,6 +166,7 @@ class CoverOrchestrator:
         _forced_position: int | None = None
         _forced_reason = ""
         _active_cover_sched_idx = -1
+        _solar_gated = True  # True = solar protection allowed (default); False = gate schedule is off
 
         cover_schedules = room.get("cover_schedules", [])
         if cover_schedules:
@@ -178,9 +179,15 @@ class CoverOrchestrator:
             if 0 <= _active_cover_sched_idx < len(cover_schedules):
                 entry = cover_schedules[_active_cover_sched_idx]
                 eid = entry.get("entity_id", "")
+                mode = entry.get("mode", "force")
                 if eid:
                     _sched_st = self.hass.states.get(eid)
-                    if _sched_st is not None and _sched_st.state == "on":
+                    if mode == "gate":
+                        # Gate mode: schedule controls when solar protection is allowed.
+                        # No forced position — RoomMind's thermal logic decides the actual position.
+                        _solar_gated = _sched_st is not None and _sched_st.state == "on"
+                    elif _sched_st is not None and _sched_st.state == "on":
+                        # Force mode (default): read position attribute and force covers.
                         _block_pos = _sched_st.attributes.get("position")
                         try:
                             _forced_position = max(0, min(100, int(_block_pos))) if _block_pos is not None else 0
@@ -220,6 +227,7 @@ class CoverOrchestrator:
             forced_position=_forced_position,
             forced_reason=_forced_reason,
             current_temp=current_temp,
+            solar_gated=_solar_gated,
         )
 
         if cover_decision.changed:

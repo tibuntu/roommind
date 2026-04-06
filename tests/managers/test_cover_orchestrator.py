@@ -802,3 +802,166 @@ class TestEstimateSolarPeakTemp:
 
         expected = 20.0 + COVER_DEFAULT_BETA_S * 0.7 * COVER_LINEAR_LOOKAHEAD_H
         assert result == pytest.approx(expected)
+
+
+# ── TestScheduleGateMode ─────────────────────────────────────────────
+
+
+class TestScheduleGateMode:
+    @pytest.mark.asyncio
+    async def test_gate_mode_on_enables_thermal(self):
+        """Gate mode schedule 'on' → evaluate called with solar_gated=True, no forced_position."""
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        sched_state = MagicMock()
+        sched_state.state = "on"
+        sched_state.attributes = {}
+        hass.states.get = MagicMock(return_value=sched_state)
+
+        room = _make_room(
+            covers=["cover.blind1"],
+            cover_schedules=[{"entity_id": "schedule.cover_time", "mode": "gate"}],
+        )
+
+        with patch(
+            "custom_components.roommind.managers.cover_orchestrator.resolve_schedule_index",
+            return_value=0,
+        ):
+            await orch.async_process(
+                area_id="living_room",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=24.0),
+                mode=MODE_HEATING,
+                current_temp=20.0,
+                outdoor_temp=15.0,
+                q_solar=0.3,
+                predicted_peak_temp=22.0,
+                has_override=False,
+            )
+
+        call_kwargs = cm.evaluate.call_args
+        assert call_kwargs[1].get("forced_position") is None or call_kwargs.kwargs.get("forced_position") is None
+        assert call_kwargs[1].get("solar_gated") is True or call_kwargs.kwargs.get("solar_gated") is True
+
+    @pytest.mark.asyncio
+    async def test_gate_mode_off_passes_solar_gated_false(self):
+        """Gate mode schedule 'off' → evaluate called with solar_gated=False."""
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        sched_state = MagicMock()
+        sched_state.state = "off"
+        sched_state.attributes = {}
+        hass.states.get = MagicMock(return_value=sched_state)
+
+        room = _make_room(
+            covers=["cover.blind1"],
+            cover_schedules=[{"entity_id": "schedule.cover_time", "mode": "gate"}],
+        )
+
+        with patch(
+            "custom_components.roommind.managers.cover_orchestrator.resolve_schedule_index",
+            return_value=0,
+        ):
+            await orch.async_process(
+                area_id="living_room",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=24.0),
+                mode=MODE_HEATING,
+                current_temp=20.0,
+                outdoor_temp=15.0,
+                q_solar=0.3,
+                predicted_peak_temp=22.0,
+                has_override=False,
+            )
+
+        call_kwargs = cm.evaluate.call_args
+        assert call_kwargs[1].get("solar_gated") is False or call_kwargs.kwargs.get("solar_gated") is False
+
+    @pytest.mark.asyncio
+    async def test_force_mode_unchanged(self):
+        """Force mode schedule 'on' → forced_position set as before, solar_gated=True (default)."""
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        sched_state = MagicMock()
+        sched_state.state = "on"
+        sched_state.attributes = {"position": 30}
+        hass.states.get = MagicMock(return_value=sched_state)
+
+        room = _make_room(
+            covers=["cover.blind1"],
+            cover_schedules=[{"entity_id": "schedule.cover_blind", "mode": "force"}],
+        )
+
+        with patch(
+            "custom_components.roommind.managers.cover_orchestrator.resolve_schedule_index",
+            return_value=0,
+        ):
+            result = await orch.async_process(
+                area_id="living_room",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=24.0),
+                mode=MODE_HEATING,
+                current_temp=20.0,
+                outdoor_temp=15.0,
+                q_solar=0.3,
+                predicted_peak_temp=22.0,
+                has_override=False,
+            )
+
+        assert result.forced_reason == "schedule_active"
+        call_kwargs = cm.evaluate.call_args
+        assert call_kwargs[1].get("forced_position") == 30 or call_kwargs.kwargs.get("forced_position") == 30
+        assert call_kwargs[1].get("solar_gated") is True or call_kwargs.kwargs.get("solar_gated", True) is True
+
+    @pytest.mark.asyncio
+    async def test_gate_mode_night_close_not_affected(self):
+        """Gate schedule 'off' does not prevent night close forced_position from Gate 1."""
+        hass = _make_hass()
+        cm = _make_cover_manager()
+        orch = CoverOrchestrator(hass, cm, _make_model_manager())
+
+        # Gate schedule is OFF
+        sched_state = MagicMock()
+        sched_state.state = "off"
+        sched_state.attributes = {}
+        hass.states.get = MagicMock(return_value=sched_state)
+
+        room = _make_room(
+            covers=["cover.blind1"],
+            cover_schedules=[{"entity_id": "schedule.cover_time", "mode": "gate"}],
+            covers_night_close=True,
+            covers_night_position=0,
+        )
+
+        with (
+            patch(
+                "custom_components.roommind.managers.cover_orchestrator.resolve_schedule_index",
+                return_value=0,
+            ),
+            patch(
+                "custom_components.roommind.managers.cover_orchestrator.solar_elevation",
+                return_value=-5.0,  # nighttime
+            ),
+        ):
+            result = await orch.async_process(
+                area_id="living_room",
+                room=room,
+                targets=TargetTemps(heat=21.0, cool=24.0),
+                mode=MODE_HEATING,
+                current_temp=20.0,
+                outdoor_temp=15.0,
+                q_solar=0.0,
+                predicted_peak_temp=20.0,
+                has_override=False,
+            )
+
+        # Night close must still fire (Gate 1, before Gate 2.5)
+        assert result.forced_reason == "night_close"
+        call_kwargs = cm.evaluate.call_args
+        assert call_kwargs[1].get("forced_position") == 0 or call_kwargs.kwargs.get("forced_position") == 0

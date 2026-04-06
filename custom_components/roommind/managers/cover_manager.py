@@ -125,6 +125,7 @@ class CoverManager:
         forced_position: int | None = None,
         forced_reason: str = "",
         current_temp: float | None = None,
+        solar_gated: bool = True,
     ) -> CoverDecision:
         """Evaluate whether to change cover positions this cycle.
 
@@ -154,6 +155,14 @@ class CoverManager:
         # Gate 2: Auto control disabled — no solar/thermal decisions
         if not covers_auto_enabled:
             return CoverDecision(target_position=current, changed=False, reason="disabled")
+
+        # Gate 2.5: Schedule gate — a gate-mode schedule is off, suppress solar logic
+        # Retract covers (open) when gate is inactive, subject to rate limit.
+        if not solar_gated:
+            state.last_was_forced = False
+            if current < 100 and (time.time() - state.last_change_ts) >= COVER_MIN_HOLD_SECONDS:
+                return self._apply_change(state, 100, "gate_retract")
+            return CoverDecision(target_position=current, changed=False, reason="gate_inactive")
 
         # Gate 3: Manual override — never fight the user
         if has_active_override:

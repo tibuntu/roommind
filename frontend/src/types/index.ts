@@ -20,6 +20,7 @@ export interface ScheduleEntry {
 
 export interface CoverScheduleEntry {
   entity_id: string;
+  mode?: "force" | "gate";
 }
 
 export interface RoomLiveData {

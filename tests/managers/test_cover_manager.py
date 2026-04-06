@@ -1059,3 +1059,55 @@ def test_low_solar_holds_open_covers_when_peak_predicted():
     assert d.changed is False
     assert "peak_predicted" in d.reason
     assert d.target_position == 100
+
+
+# ── Schedule gate mode tests ──────────────────────────────────────────
+
+
+@patch("custom_components.roommind.managers.cover_manager.time")
+def test_solar_not_gated_retracts_after_hold(mock_t):
+    """solar_gated=False, covers at 40%, hold time expired → retract to 100."""
+    mock_t.time.return_value = 1000.0
+    mgr = CoverManager()
+    # Start with covers at 40% and some change time in the past
+    state = mgr._get_state("lr")
+    state.current_position = 40
+    state.last_change_ts = 1000.0 - 1000  # 1000s ago, well past hold time
+
+    mock_t.time.return_value = 1000.0
+    d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0, **{**_BASE_KWARGS, "solar_gated": False})
+    assert d.changed is True
+    assert d.target_position == 100
+    assert d.reason == "gate_retract"
+
+
+@patch("custom_components.roommind.managers.cover_manager.time")
+def test_solar_not_gated_hold_active_no_retract(mock_t):
+    """solar_gated=False, within hold time → no change."""
+    mock_t.time.return_value = 1000.0
+    mgr = CoverManager()
+    state = mgr._get_state("lr")
+    state.current_position = 40
+    state.last_change_ts = 999.0  # 1s ago, well within hold time
+
+    d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0, **{**_BASE_KWARGS, "solar_gated": False})
+    assert d.changed is False
+    assert d.reason == "gate_inactive"
+
+
+def test_solar_gated_true_runs_full_logic():
+    """solar_gated=True (default) → existing gate flow unchanged."""
+    mgr = CoverManager()
+    # solar_gated=True is the default — solar logic runs normally
+    d = mgr.evaluate("lr", **{**_BASE_KWARGS, "solar_gated": True, "predicted_peak_temp": 20.0, "target_temp": 22.0})
+    # With low predicted peak (no threat), should remain open
+    assert d.target_position == 100
+
+
+def test_solar_not_gated_already_open_no_action():
+    """solar_gated=False, covers already at 100% → no change needed."""
+    mgr = CoverManager()
+    # Default state: current_position = 100
+    d = mgr.evaluate("lr", predicted_peak_temp=25.0, target_temp=22.0, **{**_BASE_KWARGS, "solar_gated": False})
+    assert d.changed is False
+    assert d.reason == "gate_inactive"

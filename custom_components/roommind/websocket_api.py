@@ -298,6 +298,7 @@ async def websocket_list_rooms(
         vol.Optional("cover_schedules"): [
             {
                 vol.Required("entity_id"): str,
+                vol.Optional("mode", default="force"): vol.In(["force", "gate"]),
             }
         ],
         vol.Optional("cover_schedule_selector_entity"): str,
